@@ -63,17 +63,6 @@ def read_time(addr_space, types, vaddr):
 
     return (high_time << 32) | low_time
 
-def read_time(addr_space, types, member_list, vaddr):
-    (offset, _) = get_obj_offset(types, member_list)
-		
-    low_time  = read_obj(addr_space, types, ['_KSYSTEM_TIME', 'LowPart'], vaddr+offset)
-    high_time = read_obj(addr_space, types, ['_KSYSTEM_TIME', 'High1Time'], vaddr+offset)
-    
-    if low_time == None or high_time == None:
-        return None
-    
-    return (high_time << 32) | low_time
-
 def read_time_buff(buff, types, vaddr):
     low_time  = read_obj_from_buf(buff, types,
                          ['_KSYSTEM_TIME', 'LowPart'], vaddr)

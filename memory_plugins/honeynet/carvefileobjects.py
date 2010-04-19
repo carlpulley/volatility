@@ -13,8 +13,19 @@ _1GB = GB
 self.types.update(fileobjscan.extra_types)
 self.flat_address_space = find_addr_space(FileAddressSpace(self.opts.filename), self.types)
 
+def my_read_time(addr_space, types, member_list, vaddr):
+    (offset, _) = get_obj_offset(types, member_list)
+		
+    low_time  = read_obj(addr_space, types, ['_KSYSTEM_TIME', 'LowPart'], vaddr+offset)
+    high_time = read_obj(addr_space, types, ['_KSYSTEM_TIME', 'High1Time'], vaddr+offset)
+    
+    if low_time == None or high_time == None:
+        return None
+    
+    return (high_time << 32) | low_time
+
 def read_long_integer(addr_space, types, members_list, vaddr):
-    return read_time(addr_space, types, members_list, vaddr)
+    return my_read_time(addr_space, types, members_list, vaddr)
 
 def vacb_node_size(file_size):
     if not isinstance(file_size, int):
