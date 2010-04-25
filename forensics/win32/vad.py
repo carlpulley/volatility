@@ -303,7 +303,6 @@ def append_entry(addr_space, types, vad_addr, level, storage):
 def vad_info(addr_space, types, VadRoot):
 
     vadlist = []
-   
     traverse_vad(None, addr_space, types, VadRoot, append_entry, None, None, 0, vadlist)
 
     # Use the tag to determine what data type

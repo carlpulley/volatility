@@ -257,6 +257,8 @@ xpsp2types = { \
   'LpcReplySemaphore' : [ 0x1f4, ['_KSEMAPHORE']], \
   'ThreadsProcess' : [ 0x220, ['pointer', ['_EPROCESS']]], \
   'StartAddress' : [ 0x224, ['pointer', ['void']]], \
+  'Win32StartAddress' : [ 0x228, ['pointer', ['void']]], \
+  'CrossThreadFlags' : [ 0x248, ['unsigned int']], \
 } ], \
 '_LARGE_INTEGER' : [ 0x8, {
   'LowPart' : [ 0x0, ['unsigned long']], \
@@ -269,12 +271,27 @@ xpsp2types = { \
 '_KTHREAD' : [  0x1c0, { \
   'Header' : [ 0x0, ['_DISPATCHER_HEADER']], \
   'Teb' : [ 0x20, ['pointer', ['void']]], \
+  'KernelStack' : [ 0x28, ['pointer', ['void']]], \
+  'Queue' : [ 0xe4, ['pointer', ['_KQUEUE']]], \
   'Timer' : [ 0xf0, ['_KTIMER']], \
+  'Win32Thread' : [ 0x130, ['pointer', ['void']]], \
   'TrapFrame' : [ 0x134, ['pointer', ['_KTRAP_FRAME']]], \
+  'KernelTime' : [ 0x144, ['unsigned int']], \
+  'UserTime' : [ 0x148, ['unsigned int']], \
   'SuspendSemaphore' : [ 0x19c, ['_KSEMAPHORE']], \
+  'ThreadListEntry' : [ 0x1b0, ['_LIST_ENTRY']], \
 } ], \
+'_W32THREAD' : [ 0x28, { \
+  'pEThread' : [ 0x0, ['pointer', ['_ETHREAD']]], \
+}], \
 '_KTRAP_FRAME' : [ 0x8c, { \
   'ExceptionList' : [ 0x4c, ['pointer', ['_EXCEPTION_REGISTRATION_RECORD']]], \
+  'Edx' : [ 0x3c, ['unsigned int']], \
+  'Ecx' : [ 0x40, ['unsigned int']], \
+  'Eax' : [ 0x44, ['unsigned int']], \
+  'Edi' : [ 0x54, ['unsigned int']], \
+  'Esi' : [ 0x58, ['unsigned int']], \
+  'Ebx' : [ 0x5c, ['unsigned int']], \
   'Ebp' : [ 0x60, ['unsigned int']], \
   'Eip' : [ 0x68, ['unsigned int']], \
 } ], \
@@ -400,5 +417,10 @@ xpsp2types = { \
     'FullDllName' : [ 0x24, ['_UNICODE_STRING']], \
     'BaseDllName' : [ 0x2c, ['_UNICODE_STRING']], \
 } ], \
+'_KPCRB' : [ 0x0, { \
+    'CurrentThread' : [ 0x4, ['pointer', ['_KTHREAD']]], \
+    'NextThread' : [ 0x8, ['pointer', ['_KTHREAD']]], \
+    'IdleThread' : [ 0xc, ['pointer', ['_KTHREAD']]], \
+}], \
 }
 

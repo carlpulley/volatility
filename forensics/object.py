@@ -240,8 +240,6 @@ def read_obj(addr_space, types, member_list, vaddr):
     if len(member_list) < 2:
         raise Exception('Invalid type/member ' + str(member_list))
     
-
-    
     (offset, current_type) = get_obj_offset(types, member_list)
     return read_value(addr_space, current_type, vaddr + offset)
 
