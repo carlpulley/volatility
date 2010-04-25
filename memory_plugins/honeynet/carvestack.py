@@ -1,6 +1,7 @@
 import re
 import commands
 import os.path
+import pydasm
 import fileobjscan
 from forensics.win32.vad import traverse_vad, vad_info
 
@@ -17,7 +18,7 @@ self.search_address_space = find_addr_space(self.flat_address_space, self.types)
 self.sysdtb = get_dtb(self.search_address_space, self.types)
 self.kernel_address_space = load_pae_address_space(self.opts.filename, self.sysdtb)
 
-_1752 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [ 0x01e6a790, 0x01ec5b88, 0x01ed2ab8, 0x02258b88, 0x02281bc0, 0x0228eda8, 0x02322020, 0x02472020 ]]
+_1752 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e6a790, 0x01ec5b88, 0x01ed2ab8, 0x02258b88, 0x02281bc0, 0x0228eda8, 0x02322020, 0x02472020 ]]
 
 _888 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e67170, 0x01e6b308, 0x01ed6da8, 0x0225a020, 0x0225b538, 0x02261da8, 0x02282020, 0x0240a238, 0x02534c90]]
 
@@ -65,6 +66,21 @@ def print_vadinfo(vadroot, addr, win32addr):
         print "  Start Address[*]: 0x%0.8x"%addr
         print "  Win32 Start Address: 0x%0.8x"%win32addr
 
+def disasm(addr, size):
+    if not self.process_address_space.is_valid_address(addr):
+        print "    Failed to disassemble"
+        return
+    buf = self.process_address_space.read(addr, size)
+    offset = 0
+    while offset < size:
+        i = pydasm.get_instruction(buf[offset:], pydasm.MODE_32)
+        if not i: 
+            print "    0x%0.8x: ??"%(addr+offset)
+            offset += 1 
+        else:
+            print "    0x%0.8x: %s"%(addr+offset, pydasm.get_instruction_string(i, pydasm.FORMAT_INTEL, 0))
+            offset += i.length
+
 def carvestack(ethread, address_check=None):
     print "Process ID: %d"%ethread.Cid.UniqueProcess.v()
     print "Thread ID: %d"%ethread.Cid.UniqueThread.v()
@@ -79,7 +95,7 @@ def carvestack(ethread, address_check=None):
     print_vadinfo(self.eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
     trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
     if trap_frame.is_valid():
-        print "  Registers:"
+        print "  CPU Registers:"
         for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
             print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
     teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
@@ -103,6 +119,10 @@ def carvestack(ethread, address_check=None):
             print "  EBP: 0x%0.8x"%frame['ebp']
             if frame['ebp'] >= 0x80:
                 db(frame['ebp']-0x40, 0x8d)
+            if frame != stack_frames[-1]:
+                retn_frame = stack_frames[stack_frames.index(frame)+1]
+                print "  Calling Code Dissassembly:"
+                disasm(retn_frame['eip']-0x20, 0x21)
             print "-"*5
     # FIXME: w32thread code doesn't appear to work!?
     w32thread = Object('_ETHREAD', ethread.Tcb.Win32Thread.v(), self.kernel_address_space, profile=self.eproc.profile)
