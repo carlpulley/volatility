@@ -272,6 +272,8 @@ xpsp2types = { \
   'Header' : [ 0x0, ['_DISPATCHER_HEADER']], \
   'Teb' : [ 0x20, ['pointer', ['void']]], \
   'KernelStack' : [ 0x28, ['pointer', ['void']]], \
+  'State' : [ 0x2d, ['unsigned char']], \
+  'Priority' : [ 0x33, ['char']], \
   'Queue' : [ 0xe4, ['pointer', ['_KQUEUE']]], \
   'Timer' : [ 0xf0, ['_KTIMER']], \
   'Win32Thread' : [ 0x130, ['pointer', ['void']]], \

@@ -18,6 +18,8 @@ self.search_address_space = find_addr_space(self.flat_address_space, self.types)
 self.sysdtb = get_dtb(self.search_address_space, self.types)
 self.kernel_address_space = load_pae_address_space(self.opts.filename, self.sysdtb)
 
+_4 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01f0cda8, 0x01f0d570, 0x01f1b020, 0x01f1c3d0, 0x01f1c648, 0x01f1c8c0, 0x01fbfc10, 0x01fd2020, 0x01fdc020, 0x020508a8, 0x02052890, 0x020537e0, 0x02053a58, 0x020b1628, 0x020bc980, 0x020db020, 0x02106b98, 0x02135020, 0x02135da8, 0x022c8020, 0x022c8640, 0x022c88b8, 0x022c8b30, 0x022c8da8, 0x022fda18, 0x02425da8, 0x024c3640, 0x024c38b8, 0x024c3da8, 0x024d61c0, 0x024d9998, 0x024d9c10, 0x0250c658, 0x0252b240, 0x025329e8, 0x0253e308, 0x025ab4e0, 0x025c1020, 0x025c1b30, 0x025c1da8, 0x025c42c8, 0x025c5020, 0x025c5b30, 0x025c5da8, 0x025c6020, 0x025c63c8, 0x025c6640, 0x025c68b8, 0x025c6b30, 0x025c6da8, 0x025c7020, 0x025c73c8, 0x025c7640, 0x025c78b8, 0x025c7b30, 0x025c7da8, 0x025c85b8, 0x025ecb30, 0x025ecda8]]
+
 _1752 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e6a790, 0x01ec5b88, 0x01ed2ab8, 0x02258b88, 0x02281bc0, 0x0228eda8, 0x02322020, 0x02472020 ]]
 
 _888 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e67170, 0x01e6b308, 0x01ed6da8, 0x0225a020, 0x0225b538, 0x02261da8, 0x02282020, 0x0240a238, 0x02534c90]]
@@ -100,39 +102,48 @@ def dump_stack_frame(address, length=0x80, width=16):
         N += width
     print
 
+def read_bitmap(bitmap, num):
+    return (bitmap >> num) & 1 == 1
+
+def get_kthread_state(state):
+    return ["Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting", "Transition", "DeferredReady", "GateWait"][state]
+
 def carvestack(ethread):
     print "Process ID: %d"%ethread.Cid.UniqueProcess.v()
     print "Thread ID: %d"%ethread.Cid.UniqueThread.v()
-    if (ethread.CrossThreadFlags >> 0) & 1:
+    if read_bitmap(ethread.CrossThreadFlags, 0):
         print "  Terminated thread"
-    if (ethread.CrossThreadFlags >> 1) & 1:
+    if read_bitmap(ethread.CrossThreadFlags, 1):
         print "  Dead thread"
-    if (ethread.CrossThreadFlags >> 2) & 1:
+    if read_bitmap(ethread.CrossThreadFlags, 2):
         print "  Hide thread from debugger"
-    if (ethread.CrossThreadFlags >> 4) & 1:
+    if read_bitmap(ethread.CrossThreadFlags, 4):
         print "  System thread"
     print_vadinfo(self.eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
+    print "  State: %s"%get_kthread_state(ethread.Tcb.State)
     trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
     if trap_frame.is_valid():
-        print "  CPU Registers:"
-        for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
+        print "  User Mode Registers:"
+        for reg in ['Eip', 'Ebp', 'Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
             print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
     teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
     if teb.is_valid():
-        print "  Stack"
+        print "  User Stack"
         print "    Base: 0x%0.8x"%teb.NtTib.StackBase.v()
         print "    Limit: 0x%0.8x"%teb.NtTib.StackLimit.v()
     else:
         print "  TEB has been paged out!"
     stack_frames = get_stack_frames(ethread)
     if stack_frames == []:
-        print "  Dump:"
-        dump_stack_frame(teb.NtTib.StackLimit.v()-0x40, 0x8d)
+        if teb.is_valid():
+            print "  Dump:"
+            dump_stack_frame(teb.NtTib.StackLimit.v()-0x40, 0x8d)
     else:
-        print "Stack Unwind ==>"
+        print "User Stack Unwind ==>"
         for frame in stack_frames:
-            print "  EIP: 0x%0.8x"%frame['eip']
-            print "  EBP: 0x%0.8x"%frame['ebp']
+            if stack_frames.index(frame) > 0:
+                print "  EIP: 0x%0.8x"%frame['eip']
+                print "  EBP: 0x%0.8x"%frame['ebp']
             if frame['ebp'] >= 0x80:
                 dump_stack_frame(frame['ebp']-0x40, 0x8d)
             if frame['eip'] > 0x20:
