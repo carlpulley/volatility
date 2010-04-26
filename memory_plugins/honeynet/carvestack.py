@@ -18,16 +18,6 @@ self.search_address_space = find_addr_space(self.flat_address_space, self.types)
 self.sysdtb = get_dtb(self.search_address_space, self.types)
 self.kernel_address_space = load_pae_address_space(self.opts.filename, self.sysdtb)
 
-_4 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01f0cda8, 0x01f0d570, 0x01f1b020, 0x01f1c3d0, 0x01f1c648, 0x01f1c8c0, 0x01fbfc10, 0x01fd2020, 0x01fdc020, 0x020508a8, 0x02052890, 0x020537e0, 0x02053a58, 0x020b1628, 0x020bc980, 0x020db020, 0x02106b98, 0x02135020, 0x02135da8, 0x022c8020, 0x022c8640, 0x022c88b8, 0x022c8b30, 0x022c8da8, 0x022fda18, 0x02425da8, 0x024c3640, 0x024c38b8, 0x024c3da8, 0x024d61c0, 0x024d9998, 0x024d9c10, 0x0250c658, 0x0252b240, 0x025329e8, 0x0253e308, 0x025ab4e0, 0x025c1020, 0x025c1b30, 0x025c1da8, 0x025c42c8, 0x025c5020, 0x025c5b30, 0x025c5da8, 0x025c6020, 0x025c63c8, 0x025c6640, 0x025c68b8, 0x025c6b30, 0x025c6da8, 0x025c7020, 0x025c73c8, 0x025c7640, 0x025c78b8, 0x025c7b30, 0x025c7da8, 0x025c85b8, 0x025ecb30, 0x025ecda8]]
-
-_1752 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e6a790, 0x01ec5b88, 0x01ed2ab8, 0x02258b88, 0x02281bc0, 0x0228eda8, 0x02322020, 0x02472020 ]]
-
-_888 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e67170, 0x01e6b308, 0x01ed6da8, 0x0225a020, 0x0225b538, 0x02261da8, 0x02282020, 0x0240a238, 0x02534c90]]
-
-_880 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01ed4420, 0x01edd020, 0x01ee99f0, 0x01eeb020, 0x01ef04f0, 0x01f01020, 0x01f294a8, 0x01fc1888, 0x02042398, 0x020cb020, 0x020d1020, 0x0225a9f8, 0x0225ac70, 0x02260da8, 0x0228c820, 0x022bd830, 0x022c1020, 0x022c4020, 0x022c7020, 0x022cbb48, 0x022cc708, 0x02303ba0, 0x02406020, 0x02406498, 0x024659f8, 0x024665b8, 0x024e42e8, 0x02534020]]
-
-_1244 = [Object('_ETHREAD', offset, self.flat_address_space, profile=self.eproc.profile) for offset in [0x01e95428, 0x01f2b020, 0x01f36020, 0x01fdc7c0, 0x01fe5358, 0x01ff6020, 0x0225bbe8, 0x0225cda8, 0x022bbb30, 0x022c1810, 0x022c6020, 0x022c6b30, 0x022c6da8, 0x022c83c8, 0x02309020, 0x0230a368, 0x02404648, 0x02416638, 0x02463020] ]
-
 def get_stack_frames(ethread):
     def stack_frame_iterator(ethread):
         teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
@@ -55,21 +45,6 @@ def add_vadentry(addr, addr_space, types, vad_addr, level, storage):
     if StartingVpn <= addr and addr <= EndingVpn:
         storage.append(vad_addr)
 
-def print_vadinfo(vadroot, addr, win32addr):
-    vad_nodes = []
-    traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(addr, addr_space, types, vad_addr, level, storage), None, None, 0, vad_nodes)
-    win32_vad_nodes = []
-    traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(win32addr, addr_space, types, vad_addr, level, storage), None, None, 0, win32_vad_nodes)
-    if win32_vad_nodes == [] and vad_nodes == []:
-        print "  Start Address: 0x%0.8x"%addr
-        print "  Win32 Start Address: 0x%0.8x"%win32addr     
-    elif win32_vad_nodes != []:
-        print "  Start Address: 0x%0.8x"%addr
-        print "  Win32 Start Address[*]: 0x%0.8x"%win32addr
-    else:
-        print "  Start Address[*]: 0x%0.8x"%addr
-        print "  Win32 Start Address: 0x%0.8x"%win32addr
-
 def disasm(addr, size):
     if addr < 0:
         return
@@ -87,6 +62,23 @@ def disasm(addr, size):
         else:
             print "    0x%0.8X: unreadable"%(addr+offset)
             offset += 4
+
+def print_vadinfo(vadroot, addr, win32addr):
+    vad_nodes = []
+    traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(addr, addr_space, types, vad_addr, level, storage), None, None, 0, vad_nodes)
+    win32_vad_nodes = []
+    traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(win32addr, addr_space, types, vad_addr, level, storage), None, None, 0, win32_vad_nodes)
+    if win32_vad_nodes == [] and vad_nodes == []:
+        print "  Start Address: 0x%0.8x"%addr
+        print "  Win32 Start Address: 0x%0.8x"%win32addr     
+    elif win32_vad_nodes != []:
+        print "  Start Address: 0x%0.8x"%addr
+        print "  Win32 Start Address[*]: 0x%0.8x"%win32addr
+        disasm(win32addr, 0x20)
+    else:
+        print "  Start Address[*]: 0x%0.8x"%addr
+        print "  Win32 Start Address: 0x%0.8x"%win32addr
+        disasm(addr, 0x20)
 
 def dump_stack_frame(address, length=0x80, width=16):
     print "  Frame Dump:"
@@ -106,9 +98,12 @@ def read_bitmap(bitmap, num):
     return (bitmap >> num) & 1 == 1
 
 def get_kthread_state(state):
-    return ["Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting", "Transition", "DeferredReady", "GateWait"][state]
+    try:
+        return ["Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting", "Transition", "DeferredReady", "GateWait"][state]
+    except:
+        return "%d is an unknown thread state!"%state
 
-def carvestack(ethread):
+def carve_thread(ethread):
     print "Process ID: %d"%ethread.Cid.UniqueProcess.v()
     print "Thread ID: %d"%ethread.Cid.UniqueThread.v()
     if read_bitmap(ethread.CrossThreadFlags, 0):
@@ -150,12 +145,10 @@ def carvestack(ethread):
                 print "  Calling Code Dissassembly:"
                 disasm(frame['eip']-0x20, 0x21)
             print "-"*5
-    # FIXME: w32thread code doesn't appear to work as expected!?
-    w32thread = Object('_ETHREAD', ethread.Tcb.Win32Thread.v(), self.kernel_address_space, profile=self.eproc.profile)
-    if w32thread.is_valid() and w32thread.offset >= 0x80000000:
-        print "  GUI Process: %d"%w32thread.Cid.UniqueProcess.v()
-        print "  GUI Thread: %d"%w32thread.Cid.UniqueThread.v()
-    else:
-        print "  no GUI thread"
     print "*"*20
-        
+
+def carve_process_threads():
+    print "****************"
+    print "* User Threads *"
+    print "****************"
+    [ carve_thread(ethread) for ethread in list_entry(self.eproc.ThreadListHead.v(), '_ETHREAD', fieldname='ThreadListEntry') ]

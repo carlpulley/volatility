@@ -258,6 +258,7 @@ xpsp2types = { \
   'ThreadsProcess' : [ 0x220, ['pointer', ['_EPROCESS']]], \
   'StartAddress' : [ 0x224, ['pointer', ['void']]], \
   'Win32StartAddress' : [ 0x228, ['pointer', ['void']]], \
+  'ThreadListEntry' : [ 0x22c, ['_LIST_ENTRY']], \
   'CrossThreadFlags' : [ 0x248, ['unsigned int']], \
 } ], \
 '_LARGE_INTEGER' : [ 0x8, {
