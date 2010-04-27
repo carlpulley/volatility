@@ -271,6 +271,8 @@ xpsp2types = { \
 } ], \
 '_KTHREAD' : [  0x1c0, { \
   'Header' : [ 0x0, ['_DISPATCHER_HEADER']], \
+  'InitialStack' : [ 0x18, ['pointer', ['void']]], \
+  'StackLimit' : [ 0x1c, ['pointer', ['void']]], \
   'Teb' : [ 0x20, ['pointer', ['void']]], \
   'KernelStack' : [ 0x28, ['pointer', ['void']]], \
   'State' : [ 0x2d, ['unsigned char']], \

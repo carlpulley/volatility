@@ -87,11 +87,11 @@ def print_vadinfo(vadroot, addr, win32addr):
         print "  Win32 Start Address: 0x%0.8x"%win32addr
         disasm(addr, 0x20)
 
-def dump_stack_frame(address, length=0x80, width=16):
-    print "  Frame Dump:"
+def dump_stack_frame(address, length=0x80, width=16, title="Frame Dump"):
+    print "  %s:"%title
     if length % 4 != 0:
         length = (length+4) - (length%4)
-    print "               00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F"
+    print "               +0 +1 +2 +3 +4 +5 +6 +7 +8 +9 +A +B +C +D +E +F"
     FILTER=''.join([(len(repr(chr(x)))==3) and chr(x) or '.' for x in range(256)])
     N=0
     while N < length:
@@ -128,19 +128,13 @@ def carve_thread(ethread):
         print "  User Mode Registers:"
         for reg in ['Eip', 'Ebp', 'Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
             print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
-    teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
-    if teb.is_valid():
-        print "  User Stack"
-        print "    Base: 0x%0.8x"%teb.NtTib.StackBase.v()
-        print "    Limit: 0x%0.8x"%teb.NtTib.StackLimit.v()
-    else:
-        print "  TEB has been paged out!"
+    print "    Esp: 0x%0.8x"%ethread.Tcb.KernelStack.v()
+    dump_stack_frame(ethread.Tcb.KernelStack.v()-0x40, 0x8d, title="Esp Dump")
+    print "  User Stack"
+    print "    Base: 0x%0.8x"%ethread.Tcb.InitialStack.v()
+    print "    Limit: 0x%0.8x"%ethread.Tcb.StackLimit.v()
     stack_frames = get_stack_frames(ethread)
-    if stack_frames == []:
-        if teb.is_valid():
-            print "  Dump:"
-            dump_stack_frame(teb.NtTib.StackLimit.v()-0x40, 0x8d)
-    else:
+    if stack_frames != []:
         print "User Stack Unwind ==>"
         for frame in stack_frames:
             if stack_frames.index(frame) > 0:
