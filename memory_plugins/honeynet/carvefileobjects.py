@@ -1,3 +1,10 @@
+"""
+@author:       Carl Pulley
+@license:      GNU General Public License 2.0 or later
+@contact:      c.j.pulley@hud.ac.uk
+@organization: University of Huddersfield
+"""
+
 import re
 import commands
 import os.path
