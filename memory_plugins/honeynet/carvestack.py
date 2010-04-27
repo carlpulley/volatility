@@ -25,24 +25,16 @@ self.search_address_space = find_addr_space(self.flat_address_space, self.types)
 self.sysdtb = get_dtb(self.search_address_space, self.types)
 self.kernel_address_space = load_pae_address_space(self.opts.filename, self.sysdtb)
 
-def get_stack_frames(ethread):
-    def stack_frame_iterator(ethread):
-        teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
-        stack_base = teb.NtTib.StackBase.v()
-        stack_limit = teb.NtTib.StackLimit.v()
-        trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
-        if not trap_frame.is_valid():
-            return
-        ebp = trap_frame.Ebp
-        eip = trap_frame.Eip
-        yield { 'eip':eip, 'ebp':ebp }
+def get_stack_frames(start_ebp, stack_base, stack_limit):
+    def stack_frame_iterator():
+        ebp = start_ebp
         while stack_base >= ebp and ebp > stack_limit:
-            eip = self.flat_address_space.read_long(trap_frame.vm.vtop(ebp+4))
-            ebp = self.flat_address_space.read_long(trap_frame.vm.vtop(ebp))
+            eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp+4))
+            ebp = self.flat_address_space.read_long(self.process_address_space.vtop(ebp))
             if ebp == 0x0:
                 return
             yield { 'eip':eip, 'ebp':ebp }
-    return [ frame for frame in stack_frame_iterator(ethread) ]
+    return [ frame for frame in stack_frame_iterator() ]
 
 def add_vadentry(addr, addr_space, types, vad_addr, level, storage):
     StartingVpn = read_obj(addr_space, types, ['_MMVAD_LONG', 'StartingVpn'], vad_addr)  
@@ -110,9 +102,23 @@ def get_kthread_state(state):
     except:
         return "%d is an unknown thread state!"%state
 
+def unwind_stack(stack_frames):
+    if stack_frames == []:
+        return
+    for frame in stack_frames:
+        print "  EIP: 0x%0.8x"%frame['eip']
+        print "  EBP: 0x%0.8x"%frame['ebp']
+        if frame['ebp'] >= 0x80:
+            dump_stack_frame(frame['ebp']-0x40, 0x8d)
+        if frame['eip'] > 0x20:
+            print "  Calling Code Dissassembly:"
+            disasm(frame['eip']-0x20, 0x21)
+        print "-"*5
+
 def carve_thread(ethread):
     print "Process ID: %d"%ethread.Cid.UniqueProcess.v()
     print "Thread ID: %d"%ethread.Cid.UniqueThread.v()
+    print "  State: %s"%get_kthread_state(ethread.Tcb.State)
     if read_bitmap(ethread.CrossThreadFlags, 0):
         print "  Terminated thread"
     if read_bitmap(ethread.CrossThreadFlags, 1):
@@ -122,30 +128,43 @@ def carve_thread(ethread):
     if read_bitmap(ethread.CrossThreadFlags, 4):
         print "  System thread"
     print_vadinfo(self.eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
-    print "  State: %s"%get_kthread_state(ethread.Tcb.State)
     trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
     if trap_frame.is_valid():
         print "  User Mode Registers:"
         for reg in ['Eip', 'Ebp', 'Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
             print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
-    print "    Esp: 0x%0.8x"%ethread.Tcb.KernelStack.v()
-    dump_stack_frame(ethread.Tcb.KernelStack.v()-0x40, 0x8d, title="Esp Dump")
-    print "  User Stack"
-    print "    Base: 0x%0.8x"%ethread.Tcb.InitialStack.v()
-    print "    Limit: 0x%0.8x"%ethread.Tcb.StackLimit.v()
-    stack_frames = get_stack_frames(ethread)
-    if stack_frames != []:
-        print "User Stack Unwind ==>"
-        for frame in stack_frames:
-            if stack_frames.index(frame) > 0:
-                print "  EIP: 0x%0.8x"%frame['eip']
-                print "  EBP: 0x%0.8x"%frame['ebp']
-            if frame['ebp'] >= 0x80:
-                dump_stack_frame(frame['ebp']-0x40, 0x8d)
-            if frame['eip'] > 0x20:
-                print "  Calling Code Dissassembly:"
-                disasm(frame['eip']-0x20, 0x21)
-            print "-"*5
+        eip = trap_frame.Eip
+        print "  Eip Code Dissassembly:"
+        disasm(eip-0x20, 0x21)
+        ebp = trap_frame.Ebp
+        dump_stack_frame(ebp-0x40, 0x8d, title="Ebp Dump")
+    esp = ethread.Tcb.KernelStack.v()
+    print "    Esp: 0x%0.8x"%esp
+    dump_stack_frame(esp-0x40, 0x8d, title="Esp Dump")
+    if esp >= 0x80000000:
+        print "  Current Stack [Kernel]"
+    else:
+        print "  Current Stack [User]"
+    stack_base = ethread.Tcb.InitialStack.v()
+    stack_limit = ethread.Tcb.StackLimit.v()
+    print "    Base: 0x%0.8x"%stack_base
+    print "    Limit: 0x%0.8x"%stack_limit
+    if trap_frame.is_valid() and esp >= 0x80000000:
+        print "Kernel Stack Unwind ==>"
+        # TODO: need to ensure that EBP here is pulled from kernel mode context
+        unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))        
+    teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
+    if teb.is_valid():
+        stack_base = teb.NtTib.StackBase.v()
+        stack_limit = teb.NtTib.StackLimit.v()
+        print "  User Stack"
+        print "    Base: 0x%0.8x"%stack_base
+        print "    Limit: 0x%0.8x"%stack_limit
+        if trap_frame.is_valid():
+            print "User Stack Unwind ==>"
+            unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))
+    else:
+        print "  TEB has been paged out!"
     print "*"*20
 
 def carve_process_threads():
