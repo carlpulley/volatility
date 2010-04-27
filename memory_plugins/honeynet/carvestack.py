@@ -130,17 +130,20 @@ def carve_thread(ethread):
     print_vadinfo(self.eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
     trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
     if trap_frame.is_valid():
+        print
         print "  User Mode Registers:"
-        for reg in ['Eip', 'Ebp', 'Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
+        for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi', 'Eip', 'Ebp']:
             print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
         eip = trap_frame.Eip
-        print "  Eip Code Dissassembly:"
+        print
+        print "  User Eip Code Dissassembly:"
         disasm(eip-0x20, 0x21)
         ebp = trap_frame.Ebp
-        dump_stack_frame(ebp-0x40, 0x8d, title="Ebp Dump")
+        print
+        dump_stack_frame(ebp-0x40, 0x8d, title="User Ebp Dump")
     esp = ethread.Tcb.KernelStack.v()
-    print "    Esp: 0x%0.8x"%esp
-    dump_stack_frame(esp-0x40, 0x8d, title="Esp Dump")
+    print "    Current Esp: 0x%0.8x"%esp
+    dump_stack_frame(esp-0x40, 0x8d, title="Current Esp Dump")
     if esp >= 0x80000000:
         print "  Current Stack [Kernel]"
     else:
@@ -152,7 +155,9 @@ def carve_thread(ethread):
     if trap_frame.is_valid() and esp >= 0x80000000:
         print "Kernel Stack Unwind ==>"
         # TODO: need to ensure that EBP here is pulled from kernel mode context
-        unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))        
+        unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))
+        print "<== End Kernel Stack Unwind"
+        print
     teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
     if teb.is_valid():
         stack_base = teb.NtTib.StackBase.v()
@@ -163,8 +168,12 @@ def carve_thread(ethread):
         if trap_frame.is_valid():
             print "User Stack Unwind ==>"
             unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))
+            print "<== End User Stack Unwind"
+            print
     else:
         print "  TEB has been paged out!"
+    print "End Process ID: %d"%ethread.Cid.UniqueProcess.v()
+    print "End Thread ID: %d"%ethread.Cid.UniqueThread.v()
     print "*"*20
 
 def carve_process_threads():
