@@ -283,9 +283,17 @@ xpsp2types = { \
   'TrapFrame' : [ 0x134, ['pointer', ['_KTRAP_FRAME']]], \
   'KernelTime' : [ 0x144, ['unsigned int']], \
   'UserTime' : [ 0x148, ['unsigned int']], \
+  'StackBase' : [ 0x168, ['pointer', ['void']]], \
+  'SuspendApc' : [ 0x16c, ['_KAPC']], \
   'SuspendSemaphore' : [ 0x19c, ['_KSEMAPHORE']], \
   'ThreadListEntry' : [ 0x1b0, ['_LIST_ENTRY']], \
 } ], \
+'_KAPC' : [ 0x30, { \
+  'Type' : [ 0x0, ['short']], \
+  'Size' : [ 0x2, ['short']], \
+  'Thread' : [ 0x8, ['pointer', ['_KTHREAD']]], \
+  'ApcListEntry' : [ 0xc, ['_LIST_ENTRY']], \
+}], \
 '_W32THREAD' : [ 0x28, { \
   'pEThread' : [ 0x0, ['pointer', ['_ETHREAD']]], \
 }], \
