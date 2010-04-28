@@ -110,7 +110,7 @@ def print_vadinfo(vadroot, addr, win32addr):
     traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(addr, addr_space, types, vad_addr, level, storage), None, None, 0, vad_nodes)
     win32_vad_nodes = []
     traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(win32addr, addr_space, types, vad_addr, level, storage), None, None, 0, win32_vad_nodes)
-    if win32_vad_nodes == [] and vad_nodes == []:
+    if win32addr != 0 and win32_vad_nodes == [] and vad_nodes == []:
         print "  Start Address: 0x%0.8x"%addr
         print "  Win32 Start Address: 0x%0.8x"%win32addr     
     elif win32_vad_nodes != []:
@@ -178,6 +178,8 @@ def carve_thread(ethread):
     print "*"*20
     print "Process ID: %d"%ethread.Cid.UniqueProcess.v()
     print "Thread ID: %d"%ethread.Cid.UniqueThread.v()
+    print "  Kernel Time: %d"%ethread.Tcb.KernelTime
+    print "  User Time: %d"%ethread.Tcb.UserTime
     print "  State: %s"%get_kthread_state(ethread.Tcb.State)
     if read_bitmap(ethread.CrossThreadFlags, 0):
         print "  Terminated thread"
