@@ -31,13 +31,29 @@ self.search_address_space = find_addr_space(self.flat_address_space, self.types)
 self.sysdtb = get_dtb(self.search_address_space, self.types)
 self.kernel_address_space = load_pae_address_space(self.opts.filename, self.sysdtb)
 
-def get_stack_frames(start_ebp, stack_base, stack_limit):
-    # TODO: add in code to wind up the stack
+def get_stack_frames(start_ebp, stack_base, stack_limit, start_eip=None):
     def stack_frame_iterator_up():
-        return []
+        ebp = start_ebp
+        ebp_ptr = start_ebp - 4
+        while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
+            if not self.process_address_space.is_valid_address(ebp):
+                ebp_ptr -= 1
+            else:
+                ebp_value = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr))
+                if ebp_value == ebp:
+                    ebp = ebp_ptr
+                    eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr+4))
+                    yield { 'eip':eip, 'ebp':ebp }
+                    ebp_ptr -= 4
+                else:
+                    ebp_ptr -= 1
     def stack_frame_iterator_down():
+        if start_eip != None:
+            yield { 'eip':start_eip, 'ebp':start_ebp }
         ebp = start_ebp
         while stack_base >= ebp and ebp > stack_limit:
+            if not self.process_address_space.is_valid_address(ebp):
+                return
             eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp+4))
             ebp = self.flat_address_space.read_long(self.process_address_space.vtop(ebp))
             if ebp == 0x0:
@@ -155,18 +171,8 @@ def dump_trap_frame(trap_frame, title="User"):
     print
     print "  %s Mode Registers:"%title
     for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi', 'Eip', 'Ebp']:
-        if reg in ['Eip', 'Ebp']:
-            print "    %s: %s0x%0.8x%s"%(reg, highlight_colour_cursor, eval("trap_frame.%s"%reg), "".join(colour_stack))
-        else:
-            print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
-    eip = trap_frame.Eip
-    print
-    print "  %s Eip Code Dissassembly:"%title
-    disasm(eip, 0x20, backwards=True, highlight=eip)
-    ebp = trap_frame.Ebp
-    print
-    dump_stack_frame(ebp-0x40, 0x8d, title="%s Ebp Dump"%title, highlight=ebp)
-    return ebp
+        print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
+    return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
 
 def carve_thread(ethread):
     print "*"*20
@@ -184,7 +190,7 @@ def carve_thread(ethread):
     print_vadinfo(self.eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
     trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
     if trap_frame.is_valid():
-        ebp = dump_trap_frame(trap_frame)
+        top_frame = dump_trap_frame(trap_frame)
     esp = ethread.Tcb.KernelStack.v()
     print "    Current Esp: %s0x%0.8x%s"%(highlight_colour_cursor, esp, "".join(colour_stack))
     dump_stack_frame(esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp)
@@ -199,9 +205,9 @@ def carve_thread(ethread):
     if trap_frame.is_valid() and esp >= 0x80000000:
         kernel_trap_frame = Object('_CONTEXT', esp, self.process_address_space, profile=self.eproc.profile)
         if kernel_trap_frame.is_valid():
-            kernel_ebp = dump_trap_frame(kernel_trap_frame, "Kernel")
+            top_kernel_frame = dump_trap_frame(kernel_trap_frame, "Kernel")
             print "Kernel Stack Unwind ==>"
-            unwind_stack(get_stack_frames(kernel_ebp, stack_base, stack_limit))
+            unwind_stack(get_stack_frames(top_kernel_frame['ebp'], stack_base, stack_limit, top_kernel_frame['eip']))
             print "<== End Kernel Stack Unwind"
             print
         else:
@@ -215,7 +221,7 @@ def carve_thread(ethread):
         print "    Limit: 0x%0.8x"%stack_limit
         if trap_frame.is_valid():
             print "User Stack Unwind ==>"
-            unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))
+            unwind_stack(get_stack_frames(top_frame['ebp'], stack_base, stack_limit, top_frame['eip']))
             print "<== End User Stack Unwind"
             print
         else:
