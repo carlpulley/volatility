@@ -19,6 +19,12 @@ _1MB = MB
 GB = _1KB**3
 _1GB = GB
 
+highlight_colour_cursor = "\x1b[1;34;1m"
+highlight_colour_frame = "\x1b[1;31;1m"
+highlight_colour_end = "\x1b[0m"
+
+colour_stack = [highlight_colour_end]
+
 self.types.update(fileobjscan.extra_types)
 self.flat_address_space = find_addr_space(FileAddressSpace(self.opts.filename), self.types)
 self.search_address_space = find_addr_space(self.flat_address_space, self.types)
@@ -26,7 +32,10 @@ self.sysdtb = get_dtb(self.search_address_space, self.types)
 self.kernel_address_space = load_pae_address_space(self.opts.filename, self.sysdtb)
 
 def get_stack_frames(start_ebp, stack_base, stack_limit):
-    def stack_frame_iterator():
+    # TODO: add in code to wind up the stack
+    def stack_frame_iterator_up():
+        return []
+    def stack_frame_iterator_down():
         ebp = start_ebp
         while stack_base >= ebp and ebp > stack_limit:
             eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp+4))
@@ -34,7 +43,12 @@ def get_stack_frames(start_ebp, stack_base, stack_limit):
             if ebp == 0x0:
                 return
             yield { 'eip':eip, 'ebp':ebp }
-    return [ frame for frame in stack_frame_iterator() ]
+    old_stack_frames = [ frame for frame in stack_frame_iterator_up() ]
+    old_stack_frames.reverse()
+    current_stack_frames = [ frame for frame in stack_frame_iterator_down() ]
+    if current_stack_frames != []:
+        current_stack_frames[0]['highlight'] = True
+    return old_stack_frames + current_stack_frames
 
 def add_vadentry(addr, addr_space, types, vad_addr, level, storage):
     StartingVpn = read_obj(addr_space, types, ['_MMVAD_LONG', 'StartingVpn'], vad_addr)  
@@ -44,7 +58,11 @@ def add_vadentry(addr, addr_space, types, vad_addr, level, storage):
     if StartingVpn <= addr and addr <= EndingVpn:
         storage.append(vad_addr)
 
-def disasm(addr, size):
+def disasm(addr, size, backwards=False, highlight=None):
+    if backwards:
+        size = (size/2)+1
+        addr = addr - size + 1
+    # TODO: add in code so we can correctly disassemble code backwards!
     if addr < 0:
         return
     buf = self.process_address_space.read(addr, size)
@@ -53,13 +71,22 @@ def disasm(addr, size):
         if self.process_address_space.is_valid_address(addr+offset):
             i = pydasm.get_instruction(buf[offset:], pydasm.MODE_32)
             if not i: 
-                print "    0x%0.8X: ??"%(addr+offset)
+                if addr+offset == highlight:
+                    print "%s => 0x%0.8X%s: ??"%(highlight_color_cursor, addr+offset, "".join(colour_stack))
+                else:
+                    print "    0x%0.8X: ??"%(addr+offset)
                 offset += 1 
             else:
-                print "    0x%0.8X: %s"%(addr+offset, pydasm.get_instruction_string(i, pydasm.FORMAT_INTEL, 0))
+                if addr+offset == highlight:
+                    print "%s => 0x%0.8X%s: %s"%(highlight_colour_cursor, addr+offset, "".join(colour_stack), pydasm.get_instruction_string(i, pydasm.FORMAT_INTEL, 0))
+                else:
+                    print "    0x%0.8X: %s"%(addr+offset, pydasm.get_instruction_string(i, pydasm.FORMAT_INTEL, 0))
                 offset += i.length
         else:
-            print "    0x%0.8X: unreadable"%(addr+offset)
+            if addr+offset == highlight:
+                print "%s => 0x%0.8X%s: unreadable"%(highlight_colour_cursor, addr+offset, "".join(colour_stack))
+            else:
+                print "    0x%0.8X: unreadable"%(addr+offset)
             offset += 4
 
 def print_vadinfo(vadroot, addr, win32addr):
@@ -72,14 +99,14 @@ def print_vadinfo(vadroot, addr, win32addr):
         print "  Win32 Start Address: 0x%0.8x"%win32addr     
     elif win32_vad_nodes != []:
         print "  Start Address: 0x%0.8x"%addr
-        print "  Win32 Start Address[*]: 0x%0.8x"%win32addr
-        disasm(win32addr, 0x20)
+        print "  Win32 Start Address[*]: %s0x%0.8x%s"%(highlight_colour_cursor, win32addr, "".join(colour_stack))
+        disasm(win32addr, 0x20, highlight=win32addr)
     else:
-        print "  Start Address[*]: 0x%0.8x"%addr
+        print "  Start Address[*]: %s0x%0.8x%s"%(highlight_colour_cursor, addr, "".join(colour_stack))
         print "  Win32 Start Address: 0x%0.8x"%win32addr
-        disasm(addr, 0x20)
+        disasm(addr, 0x20, highlight=addr)
 
-def dump_stack_frame(address, length=0x80, width=16, title="Frame Dump"):
+def dump_stack_frame(address, length=0x80, width=16, title="Frame Dump", highlight=None):
     print "  %s:"%title
     if length % 4 != 0:
         length = (length+4) - (length%4)
@@ -89,7 +116,10 @@ def dump_stack_frame(address, length=0x80, width=16, title="Frame Dump"):
     while N < length:
         data = ' '.join([ "%02X"%ord(x) if x else '??' for x in [ self.process_address_space.read(address+N+i, 1) for i in range(0, width) ] ])
         hexa = ''.join([ x.translate(FILTER) if x else '.' for x in [ self.process_address_space.read(address+N+i, 1) for i in range(0, width) ] ])
-        print "    0x%08X %-*s %s"%(address+N, width*3, data, hexa)
+        if highlight == address+N:
+            print "%s => 0x%08X%s %-*s %s"%(highlight_colour_cursor, address+N, "".join(colour_stack), width*3, data, hexa)
+        else:
+            print "    0x%08X %-*s %s"%(address+N, width*3, data, hexa)
         N += width
     print
 
@@ -106,16 +136,40 @@ def unwind_stack(stack_frames):
     if stack_frames == []:
         return
     for frame in stack_frames:
-        print "  EIP: 0x%0.8x"%frame['eip']
-        print "  EBP: 0x%0.8x"%frame['ebp']
+        if 'highlight' in frame:
+            print highlight_colour_frame
+            colour_stack.append(highlight_colour_frame)
+        print "  EIP: %s0x%0.8x%s"%(highlight_colour_cursor, frame['eip'], "".join(colour_stack))
+        print "  EBP: %s0x%0.8x%s"%(highlight_colour_cursor, frame['ebp'], "".join(colour_stack))
         if frame['ebp'] >= 0x80:
-            dump_stack_frame(frame['ebp']-0x40, 0x8d)
+            dump_stack_frame(frame['ebp']-0x40, 0x8d, highlight=frame['ebp'])
         if frame['eip'] > 0x20:
             print "  Calling Code Dissassembly:"
-            disasm(frame['eip']-0x20, 0x21)
+            disasm(frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
+        if 'highlight' in frame:
+            colour_stack.pop()
+            print "".join(colour_stack)
         print "-"*5
 
+def dump_trap_frame(trap_frame, title="User"):
+    print
+    print "  %s Mode Registers:"%title
+    for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi', 'Eip', 'Ebp']:
+        if reg in ['Eip', 'Ebp']:
+            print "    %s: %s0x%0.8x%s"%(reg, highlight_colour_cursor, eval("trap_frame.%s"%reg), "".join(colour_stack))
+        else:
+            print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
+    eip = trap_frame.Eip
+    print
+    print "  %s Eip Code Dissassembly:"%title
+    disasm(eip, 0x20, backwards=True, highlight=eip)
+    ebp = trap_frame.Ebp
+    print
+    dump_stack_frame(ebp-0x40, 0x8d, title="%s Ebp Dump"%title, highlight=ebp)
+    return ebp
+
 def carve_thread(ethread):
+    print "*"*20
     print "Process ID: %d"%ethread.Cid.UniqueProcess.v()
     print "Thread ID: %d"%ethread.Cid.UniqueThread.v()
     print "  State: %s"%get_kthread_state(ethread.Tcb.State)
@@ -130,20 +184,10 @@ def carve_thread(ethread):
     print_vadinfo(self.eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
     trap_frame = Object('_KTRAP_FRAME', ethread.Tcb.TrapFrame.v(), self.process_address_space, profile=self.eproc.profile)
     if trap_frame.is_valid():
-        print
-        print "  User Mode Registers:"
-        for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi', 'Eip', 'Ebp']:
-            print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
-        eip = trap_frame.Eip
-        print
-        print "  User Eip Code Dissassembly:"
-        disasm(eip-0x20, 0x21)
-        ebp = trap_frame.Ebp
-        print
-        dump_stack_frame(ebp-0x40, 0x8d, title="User Ebp Dump")
+        ebp = dump_trap_frame(trap_frame)
     esp = ethread.Tcb.KernelStack.v()
-    print "    Current Esp: 0x%0.8x"%esp
-    dump_stack_frame(esp-0x40, 0x8d, title="Current Esp Dump")
+    print "    Current Esp: %s0x%0.8x%s"%(highlight_colour_cursor, esp, "".join(colour_stack))
+    dump_stack_frame(esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp)
     if esp >= 0x80000000:
         print "  Current Stack [Kernel]"
     else:
@@ -153,11 +197,15 @@ def carve_thread(ethread):
     print "    Base: 0x%0.8x"%stack_base
     print "    Limit: 0x%0.8x"%stack_limit
     if trap_frame.is_valid() and esp >= 0x80000000:
-        print "Kernel Stack Unwind ==>"
-        # TODO: need to ensure that EBP here is pulled from kernel mode context
-        unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))
-        print "<== End Kernel Stack Unwind"
-        print
+        kernel_trap_frame = Object('_CONTEXT', esp, self.process_address_space, profile=self.eproc.profile)
+        if kernel_trap_frame.is_valid():
+            kernel_ebp = dump_trap_frame(kernel_trap_frame, "Kernel")
+            print "Kernel Stack Unwind ==>"
+            unwind_stack(get_stack_frames(kernel_ebp, stack_base, stack_limit))
+            print "<== End Kernel Stack Unwind"
+            print
+        else:
+            print "Kernel Trap Frame is Invalid!"
     teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
     if teb.is_valid():
         stack_base = teb.NtTib.StackBase.v()
@@ -170,6 +218,8 @@ def carve_thread(ethread):
             unwind_stack(get_stack_frames(ebp, stack_base, stack_limit))
             print "<== End User Stack Unwind"
             print
+        else:
+            print "User Trap Frame is Invalid!"
     else:
         print "  TEB has been paged out!"
     print "End Process ID: %d"%ethread.Cid.UniqueProcess.v()

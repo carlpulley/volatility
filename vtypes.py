@@ -308,6 +308,17 @@ xpsp2types = { \
   'Ebp' : [ 0x60, ['unsigned int']], \
   'Eip' : [ 0x68, ['unsigned int']], \
 } ], \
+'_CONTEXT' : [ 0x2cc, { \
+  'Edi' : [ 0x9c, ['unsigned int']], \
+  'Esi' : [ 0xa0, ['unsigned int']], \
+  'Ebx' : [ 0xa4, ['unsigned int']], \
+  'Edx' : [ 0xa8, ['unsigned int']], \
+  'Ecx' : [ 0xac, ['unsigned int']], \
+  'Eax' : [ 0xb0, ['unsigned int']], \
+  'Ebp' : [ 0xb4, ['unsigned int']], \
+  'Eip' : [ 0xb8, ['unsigned int']], \
+  'Esp' : [ 0xc4, ['unsigned int']], \
+} ], \
 '_KTIMER' : [  0x28, { \
   'Header' : [ 0x0, ['_DISPATCHER_HEADER']], \
 } ], \
