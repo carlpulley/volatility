@@ -170,7 +170,7 @@ def unwind_stack(stack_frames):
 def dump_trap_frame(trap_frame, title="User"):
     print
     print "  %s Mode Registers:"%title
-    for reg in ['Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi', 'Eip', 'Ebp']:
+    for reg in ['Eip', 'Ebp', 'Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
         print "    %s: 0x%0.8x"%(reg, eval("trap_frame.%s"%reg))
     return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
 
@@ -237,3 +237,7 @@ def carve_process_threads():
     print "* User Threads *"
     print "****************"
     [ carve_thread(ethread) for ethread in list_entry(self.eproc.ThreadListHead.v(), '_ETHREAD', fieldname='ThreadListEntry') ]
+    print "***************"
+    print "* GUI Threads *"
+    print "***************"
+    [ carve_thread(ethread.Tcb.Win32Thread) for ethread in list_entry(self.eproc.ThreadListHead.v(), '_ETHREAD', fieldname='ThreadListEntry') if ethread.Tcb.Win32Thread.is_valid() and ethread.Tcb.Win32Thread.offset >= 0x80000000 ]
