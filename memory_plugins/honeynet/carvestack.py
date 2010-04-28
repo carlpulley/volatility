@@ -36,7 +36,7 @@ def get_stack_frames(start_ebp, stack_base, stack_limit, start_eip=None):
         ebp = start_ebp
         ebp_ptr = start_ebp - 4
         while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
-            if not self.process_address_space.is_valid_address(ebp):
+            if not self.process_address_space.is_valid_address(ebp_ptr):
                 ebp_ptr -= 1
             else:
                 ebp_value = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr))
