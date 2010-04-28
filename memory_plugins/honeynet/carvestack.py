@@ -192,8 +192,6 @@ def carve_thread(ethread):
     if trap_frame.is_valid():
         top_frame = dump_trap_frame(trap_frame)
     esp = ethread.Tcb.KernelStack.v()
-    print "    Current Esp: %s0x%0.8x%s"%(highlight_colour_cursor, esp, "".join(colour_stack))
-    dump_stack_frame(esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp)
     if esp >= 0x80000000:
         print "  Current Stack [Kernel]"
     else:
@@ -202,16 +200,8 @@ def carve_thread(ethread):
     stack_limit = ethread.Tcb.StackLimit.v()
     print "    Base: 0x%0.8x"%stack_base
     print "    Limit: 0x%0.8x"%stack_limit
-    if trap_frame.is_valid() and esp >= 0x80000000:
-        kernel_trap_frame = Object('_CONTEXT', esp, self.process_address_space, profile=self.eproc.profile)
-        if kernel_trap_frame.is_valid():
-            top_kernel_frame = dump_trap_frame(kernel_trap_frame, "Kernel")
-            print "Kernel Stack Unwind ==>"
-            unwind_stack(get_stack_frames(top_kernel_frame['ebp'], stack_base, stack_limit, top_kernel_frame['eip']))
-            print "<== End Kernel Stack Unwind"
-            print
-        else:
-            print "Kernel Trap Frame is Invalid!"
+    print "    Current Esp: %s0x%0.8x%s"%(highlight_colour_cursor, esp, "".join(colour_stack))
+    dump_stack_frame(esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp)
     teb = Object('_TEB', ethread.Tcb.Teb.v(), self.process_address_space, profile=self.eproc.profile)
     if teb.is_valid():
         stack_base = teb.NtTib.StackBase.v()
