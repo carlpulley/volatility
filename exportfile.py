@@ -132,16 +132,9 @@ def dump_file_object(fobj_phy_addr, base_dir="."):
             [ fobj.write(data) for data in [ dump_section(read_obj(self.process_address_space, self.types, ['_VACB', 'BaseAddress'], vacb), file_size, section, file_name_path) for (vacb, section) in vacb_list if vacb != 0 and vacb != None ] ]
     else:
         print "WARNING: No Shared Cache Map for:\n  %s"%file_name
-    
-fobjs = [ 0x01e6f2d8, 0x01e764c8, 0x01e8aad8, 0x01e8c8e8, 0x01f16360, 0x01f19eb8, 0x01f22df8, 0x01ffaaf0, 0x01ffadf0, 0x020c1960, 0x020c8f90, 0x0226f028, 0x0227de50, 0x022c50d0, 0x022c7b98, 0x022cbf90, 0x022cebd8, 0x022da3d8, 0x022da470, 0x022e2520, 0x022f11b0, 0x024137f8, 0x02413890, 0x025b3dd8 ]
-for fobj in fobjs:
-    try:
-        dump_file_object(fobj, base_dir)
-    except:
-        print "ERROR: failed to dump _FILE_OBJECT %02x!"%fobj
 
-class ExportFile(commands.command):
-	"""Given a _FILE_OBJECT, extract the associated file from memory (with paged-out sections being padded with a given fill character)
+class ExportFile(filescan.FileScan):
+	"""Given a _FILE_OBJECT, extract (saving to disk) the associated file from memory (with paged-out sections being padded with a given fill character - 0x0 by default)
 	"""
 	# Declare meta information associated with this plugin
     meta_info = {}
@@ -153,11 +146,28 @@ class ExportFile(commands.command):
     meta_info['version'] = '0.1'
    
 	def __init__(self, config, args*):
+		config.add_option("fill", default = 0x0, type = 'int', help = "fill character for padding paged-out files")
+		config.add_option("dir", short_option = 'd', default = ".", type = 'str', help = "directory in which to save exported files")
+		# FIXME: only one of the following options must be present, but not all of them!
+		config.add_option("pid", type = 'int', help = "extract all _FILE_OBJECT's for a PID")
+		config.add_option("eproc", type = 'str', help = "extract all _FILE_OBJECT's for an _EPROCESS")
+		config.add_option("fobj", type = 'str', help = "extract a given _FILE_OBJECT")
 		commands.command.__init__(self, config, args*)
 		self.kernel_address_space = None
 		
 	def calculate(self):
-		pass
+		if self._config.fobj:
+			dump_file_object(self._config.fobj, self._config.dir)
+		elif self._config.pid:
+			# FIXME: need to extract all _FILE_OBJECT's under given _EPROCESS (obtained from PID)
+			for fobj in self._config.pid:
+				dump_file_object(fobj, self._config.dir)
+		elif self._config.eproc:
+			# FIXME: need to extract all _FILE_OBJECT's under given _EPROCESS
+			for fobj in self._config.eproc:
+				dump_file_object(fobj, self._config.dir)
+		else:
+			# FIXME: generate an error message - we shouldn't get here!
 		
 	def render_text(self, outfd, data):
 		pass
