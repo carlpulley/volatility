@@ -139,4 +139,26 @@ for fobj in fobjs:
         dump_file_object(fobj, base_dir)
     except:
         print "ERROR: failed to dump _FILE_OBJECT %02x!"%fobj
+
+class ExportFile(commands.command):
+	"""Given a _FILE_OBJECT, extract the associated file from memory (with paged-out sections being padded with a given fill character)
+	"""
+	# Declare meta information associated with this plugin
+    meta_info = {}
+    meta_info['author'] = 'Carl Pulley'
+    meta_info['contact'] = 'c.j.pulley@hud.ac.uk'
+    meta_info['license'] = 'GNU General Public License 2.0 or later'
+    meta_info['url'] = 'http://compeng.hud.ac.uk/scomcjp/'
+    meta_info['os'] = ['WinXPSP3x86', 'WIN_32_XP_SP2']
+    meta_info['version'] = '0.1'
+   
+	def __init__(self, config, args*):
+		commands.command.__init__(self, config, args*)
+		self.kernel_address_space = None
+		
+	def calculate(self):
+		pass
+		
+	def render_text(self, outfd, data):
+		pass
     
