@@ -85,7 +85,6 @@ class ExportFile(filescan.FileScan):
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
 
 	# BUG: filescan plugin appears to calculate _FILE_OBJECT physical addresses which need #18 bytes adding to them?
-	# TODO: extract and collate data from private cache maps
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
@@ -172,17 +171,13 @@ class ExportFile(filescan.FileScan):
 			print "WARNING:", file_name
 			print "  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the file object's _SECTION_OBJECT_POINTERS), and one should exist!"
 
-	# FIXME: finish porting the following code!
 	def dump_data(self, outfd, data, addr, start, end, section, base_dir):
-		#with open("%s/cache.0x%02X-0x%02X.dmp"%(base_dir, section*(256*KB) + start*(4*KB), section*(256*KB) + end*(4*KB) - 1), 'wb') as fobj:
-		#	fobj.write(data)
 		header_str = "File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
 		outfd.write(header_str)
 		outfd.write("\n")
 		outfd.write("*"*len(header_str))
 		outfd.write("\n")
 		outfd.write(data)
-		#db(addr)
 
 	def dump_section(self, outfd, addr, size, section, file_name):
 		max_page = (size/(4*self.KB)) + 1
@@ -191,8 +186,6 @@ class ExportFile(filescan.FileScan):
 		padding = ""
 		fill_char = self._config.fill
 		base_dir = re.sub(r'[\\:]', '/', self._config.dir + "/" + file_name)
-		#if not os.path.exists(base_dir):
-		#	commands.getoutput("mkdir -p %s"%re.escape(base_dir))
 		last_page = 0
 		for page in range(0, max_page):
 			if self.process_address_space.is_valid_address(addr + page*(4*self.KB)): # FIXME
@@ -214,30 +207,4 @@ class ExportFile(filescan.FileScan):
 			section_data += result
 			self.dump_data(outfd, result, addr + last_page*(4*self.KB), last_page, max_page, section, base_dir)
 		outfd.write(section_data)
-
-
-#def my_read_time(addr_space, types, member_list, vaddr):
-#    (offset, _) = get_obj_offset(types, member_list)
-#		
-#    low_time  = read_obj(addr_space, types, ['_KSYSTEM_TIME', 'LowPart'], vaddr+offset)
-#    high_time = read_obj(addr_space, types, ['_KSYSTEM_TIME', 'High1Time'], vaddr+offset)
-#    
-#    if low_time == None or high_time == None:
-#        return None
-#    
-#    return (high_time << 32) | low_time
-#
-#def size_str(size):
-#    size_str = size
-#    units = ""
-#    if size % _1MB == size:
-#        size_str = size/_1KB
-#        units = "K"
-#    elif size % _1GB == size:
-#        size_str = size/_1MB
-#        units = "M"
-#    else:
-#        size_str = size/_1GB
-#        units = "G"
-#    return "%d%c"%(size_str, units)
     
