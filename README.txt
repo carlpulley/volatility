@@ -14,11 +14,20 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA 
 
+
+The code for the following plugins was originally written for Challenge 3 of 
+the Honeynet Forensic Challenge 2010 (Banking Troubles - see the v1.3 branch 
+and http://honeynet.org/challenges/2010_3_banking_troubles for more 
+information).
+
 To install these plugins simply include them (e.g. with the --plugins command 
 line option), when running Volatility 2.0.
 
   exportfile.py - this plugin implements the exporting and saving of 
                   _FILE_OBJECT's
+
+For documentation on using these plugins, please use the Volatility 2.0 --help 
+option to the plugin command.
 
 CURRENT LIMITATIONS
 ===================
