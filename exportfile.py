@@ -42,13 +42,14 @@ class ExportFile(filescan.FileScan):
 	Pages that can not be retrieved from memory are saved as pages filled in a given fill character.
 	
 	Exported files are written to a user-defined dump directory. Contiguous retrievable pages are written
-	to a file named using the retrieved virtual addresses. In addition, a "this" file is created - this is 
-	an aggregation of the retrieved pages with non-retrievable pages substitued by fill-character pages.
+	to a file named using the retrieved virtual addresses. In addition, a "this" file is created (with the 
+	correct file size!) - this is an aggregation of the retrieved pages with non-retrievable pages 
+	substitued by fill-character pages.
 	All exported files are placed into a common directory whose name and path agree with that located in
-	_FILE_OBJECT.
+	_FILE_OBJECT (modulo a unix/linux path naming convention).
 	
 	This plugin is particularly useful when one expects memory (that holds the file's shared cache pages) to be 
-	fragmented, and so linear carving techniques (e.g. using scalpel or foremost) might be expected to fail.
+	fragmented, and so, linear carving techniques (e.g. using scalpel or foremost) might be expected to fail.
 	
 	EXAMPLE:
 	
@@ -61,6 +62,8 @@ class ExportFile(filescan.FileScan):
 	    http://computer.forensikblog.de/en/2009/04/linking_file_objects_to_processes.html (accessed 6/Oct/2011)
 	[3] OSR Online article: Finding File Contents in Memory
 	    http://www.osronline.com/article.cfm?article=280 (accessed 7/Oct/2011)
+	[4] Extracting Event Logs or Other Memory Mapped Files from Memory Dumps by J. McCash
+	    http://computer-forensics.sans.org/blog/2011/02/01/digital-forensics-extracting-event-logs-memory-mapped-files-memory-dumps (accessed 7/Oct/2011)
 	"""
 
 	meta_info = dict(
@@ -154,9 +157,11 @@ class ExportFile(filescan.FileScan):
 		section_object_ptr = obj.Object('_SECTION_OBJECT_POINTERS', offset = file_object.SectionObjectPointer, vm = self.process_address_space)
 		shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.process_address_space)
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
+			# Use System processes Page Directory to dump memory mapped drivers/modules
 			classify[0] = True
 			print "TODO: dump DataSectionObject _CONTROL_AREA"
 		if section_object_ptr.ImageSectionObject != 0 and section_object_ptr.ImageSectionObject != None:
+			# Use the processes Page Directory to dump memory mapped image file
 			classify[2] = True
 			print "TODO: dump ImageSectionObject _CONTROL_AREA"
 		if shared_cache_map != 0 and shared_cache_map != None:
