@@ -38,7 +38,6 @@ Under Windows, file's will be loaded into memory as:
   -or, shared access files (and so one accesses the file via its shared cache 
    map).
 The exportfile plugin will currently only extract files stored in the shared 
-cache map (and then we don't currently deal with large files that use 128B VACB 
-nodes).
+cache map.
 
 This will change in the very near future (as these raised issues get fixed!).

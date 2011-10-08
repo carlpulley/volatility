@@ -30,6 +30,7 @@ This plugin implements the exporting and saving of _FILE_OBJECT's
 import re
 import commands
 import os.path
+import math
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
@@ -59,7 +60,11 @@ class ExportFile(filescan.FileScan):
 	reference [5] (below) for more information regarding some of the benefits 
 	of accessing files via the _FILE_OBJECT data structure.
 	
-	EXAMPLE:
+	EXAMPLE 1: Memory Mapped
+	
+	...TODO...
+	
+	EXAMPLE 2: Shared Cache Map
 	
 	...TODO...
 	
@@ -124,6 +129,7 @@ class ExportFile(filescan.FileScan):
 			# FIXME: need to restrict _FILE_OBJECT's to the given _EPROCESS
 			return filter(None, [ self.dump_file_object(file_obj) for (object_obj, file_obj, name) in filescan.FileScan.calculate(self) if True ])
 
+	# TODO: implement outputing to --dir argument
 	def render_text(self, outfd, data):
 		for file_name, file_size, file_object in data:
 			for vacb, section in file_object:
@@ -156,15 +162,15 @@ class ExportFile(filescan.FileScan):
 		elif node_size == 4:
 			return [ (shared_cache_map.Vacbs + node_size*index, index) for index in range(0, node_size) ]
 		elif node_size == 128:
-			# TODO: calculate vacb tree depth
-			# tree_depth = (floor(log2(file_size)) - 18)/7
+			# calculate vacb tree depth (see [1])
+			file_size = self.read_large_integer(shared_cache_map.FileSize)
+			tree_depth = math.ceil((math.ceil(math.log(file_size, 2)) - 18)/7)
 			# TODO: traverse vacb tree and grab vacb addresses
 			debug.error("TODO: not implemented yet!")
 		else:
 			debug.error("{0} is an invalid node size - nodes may only be 1, 4 or 128 element array(s)".format(node_size))
 
 	def dump_file_object(self, file_object):
-		# TODO: when writing section pages, need to detect overwrites and compare for sanities sake!?
 		file_name = self.parse_string(file_object.FileName)
 		if file_name == None:
 			debug.error("expected file name to be non-null!")
