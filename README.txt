@@ -40,4 +40,4 @@ Under Windows, file's will be loaded into memory as:
 The exportfile plugin will currently only extract files stored in the shared 
 cache map.
 
-This will change in the very near future (as these raised issues get fixed!).
+This will change in the very near future.
