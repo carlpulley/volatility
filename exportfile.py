@@ -33,37 +33,52 @@ import os.path
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
+import volatility.debug as debug
 import volatility.plugins.filescan as filescan
 
 class ExportFile(filescan.FileScan):
 	"""
-	Given a PID or _EPROCESS, and (optionally) a _FILE_OBJECT, extract the associated file(s) from memory.
+	Given a PID or _EPROCESS, and (optionally) a _FILE_OBJECT, extract the 
+	associated _FILE_OBJECT's from memory.
 	
-	Pages that can not be retrieved from memory are saved as pages filled in a given fill character.
+	Pages that can not be retrieved from memory are saved as pages filled in a 
+	given fill character.
 	
-	Exported files are written to a user-defined dump directory. Contiguous retrievable pages are written
-	to a file named using the retrieved virtual addresses. In addition, a "this" file is created (with the 
-	correct file size!) - this is an aggregation of the retrieved pages with non-retrievable pages 
-	substitued by fill-character pages.
-	All exported files are placed into a common directory whose name and path agree with that located in
-	_FILE_OBJECT (modulo a unix/linux path naming convention).
+	Exported files are written to a user-defined dump directory. Contiguous 
+	retrievable pages are written to a file named using the retrieved virtual 
+	addresses. In addition, a "this" file is created (with the correct file 
+	size!) - this is an aggregation of the retrieved pages with non-retrievable 
+	pages substitued by fill-character pages.
+	All exported files are placed into a common directory whose name and path 
+	agree with that located in _FILE_OBJECT (modulo a unix/linux path naming 
+	convention).
 	
-	This plugin is particularly useful when one expects memory (that holds the file's shared cache pages) to be 
-	fragmented, and so, linear carving techniques (e.g. using scalpel or foremost) might be expected to fail.
+	This plugin is particularly useful when one expects memory (that holds the 
+	file's shared cache pages) to be fragmented, and so, linear carving 
+	techniques (e.g. using scalpel or foremost) might be expected to fail. See 
+	reference [5] (below) for more information regarding some of the benefits 
+	of accessing files via the _FILE_OBJECT data structure.
 	
 	EXAMPLE:
 	
 	...TODO...
 	
 	REFERENCES:
-	[1] Information on accessing shared cache maps etc.:
-	    Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro Developer) 5th ed. Microsoft Press.
-	[2] Information on mapping _FILE_OBJECT's to _EPROCESS:
-	    http://computer.forensikblog.de/en/2009/04/linking_file_objects_to_processes.html (accessed 6/Oct/2011)
-	[3] OSR Online article: Finding File Contents in Memory
-	    http://www.osronline.com/article.cfm?article=280 (accessed 7/Oct/2011)
-	[4] Extracting Event Logs or Other Memory Mapped Files from Memory Dumps by J. McCash
-	    http://computer-forensics.sans.org/blog/2011/02/01/digital-forensics-extracting-event-logs-memory-mapped-files-memory-dumps (accessed 7/Oct/2011)
+	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
+	    Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro 
+	    Developer) 5th ed. Microsoft Press.
+	[2] Information on mapping _FILE_OBJECT's to _EPROCESS (accessed 6/Oct/2011):
+	    http://computer.forensikblog.de/en/2009/04/linking_file_objects_to_processes.html
+	[3] OSR Online article: Finding File Contents in Memory (accessed 7/Oct/2011):
+	    http://www.osronline.com/article.cfm?article=280
+	[4] Extracting Event Logs or Other Memory Mapped Files from Memory Dumps by 
+	    J. McCash (accessed 7/Oct/2011):
+	    http://computer-forensics.sans.org/blog/2011/02/01/digital-forensics-extracting-event-logs-memory-mapped-files-memory-dumps
+	[5] Physical Memory Forensics for Files and Cache by J. Butler and J. 
+	    Murdock (accessed 8/Oct/2011):
+	    https://media.blackhat.com/bh-us-11/Butler/BH_US_11_ButlerMurdock_Physical_Memory_Forensics-WP.pdf
+	[6] CodeMachine article on Prototype PTEs (accessed 8/Oct/2011):
+	    http://www.codemachine.com/article_protopte.html
 	"""
 
 	meta_info = dict(
@@ -90,13 +105,13 @@ class ExportFile(filescan.FileScan):
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
 		if not(bool(self._config.pid) ^ bool(self._config.eproc)):
 			if not(bool(self._config.pid) or bool(self._config.eproc)):
-				raise Exception("ERROR: exactly one of the options --pid or --eproc *MUST* be specified (you have not specified _any_ of these options)")
+				debug.error("exactly *ONE* of the options --pid or --eproc must be specified (you have not specified _any_ of these options)")
 			else:
-				raise Exception("ERROR: exactly one of the options --pid or --eproc *MUST* be specified (you have specified _both_ of these options)")
+				debug.error("exactly *ONE* of the options --pid or --eproc must be specified (you have specified _both_ of these options)")
 		if self._config.pid:
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
 			if len(eproc_matches) != 1:
-				raise Exception("ERROR: -pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
+				debug.error("-pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return self.dump_from_eproc(eproc_matches[0])
 		else:
 			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.flat_address_space))
@@ -115,7 +130,7 @@ class ExportFile(filescan.FileScan):
 				self.dump_section(outfd, vacb.BaseAddress, file_size, section, file_name)
     
 	def render_sql(self, outfd, data):
-		raise Exception("TODO: not implemented yet!")
+		debug.error("TODO: not implemented yet!")
 
 	KB = 0x400
 	_1KB = KB
@@ -142,34 +157,43 @@ class ExportFile(filescan.FileScan):
 			return [ (shared_cache_map.Vacbs + node_size*index, index) for index in range(0, node_size) ]
 		elif node_size == 128:
 			# TODO: calculate vacb tree depth
+			# tree_depth = (floor(log2(file_size)) - 18)/7
 			# TODO: traverse vacb tree and grab vacb addresses
-			raise Exception("TODO: not implemented yet!")
+			debug.error("TODO: not implemented yet!")
 		else:
-			raise Exception("ERROR: {0} is an invalid node size - nodes may only be 1, 4 or 128 element array(s)".format(node_size))
+			debug.error("{0} is an invalid node size - nodes may only be 1, 4 or 128 element array(s)".format(node_size))
 
 	def dump_file_object(self, file_object):
 		# TODO: when writing section pages, need to detect overwrites and compare for sanities sake!?
 		file_name = self.parse_string(file_object.FileName)
 		if file_name == None:
-			raise Exception("ERROR: expected file name to be non-null!")
-		classify = [ False, False, False ] # [ DataSectionObject != None, SharedCacheMap != None, ImageSectionObject != None ]
+			debug.error("expected file name to be non-null!")
+		DSO = 0 # DataSectionObject
+		SCM = 1 # SharedCacheMap
+		ISO = 2 # ImageSectionObject
+		classify = [ False, False, False ] # [ DSO != None, SCM != None, ISO != None ]
 		section_object_ptr = obj.Object('_SECTION_OBJECT_POINTERS', offset = file_object.SectionObjectPointer, vm = self.process_address_space)
-		shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.process_address_space)
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
-			# Use System processes Page Directory to dump memory mapped drivers/modules
-			classify[0] = True
-			print "TODO: dump DataSectionObject _CONTROL_AREA"
+			classify[DSO] = True
+		if section_object_ptr.SharedCacheMap != 0 and section_object_ptr.SharedCacheMap != None:
+			classify[SCM] = True
 		if section_object_ptr.ImageSectionObject != 0 and section_object_ptr.ImageSectionObject != None:
-			# Use the processes Page Directory to dump memory mapped image file
-			classify[2] = True
-			print "TODO: dump ImageSectionObject _CONTROL_AREA"
-		if shared_cache_map != 0 and shared_cache_map != None:
-			classify[1] = True
+			classify[ISO] = True
+
+		if not(classify[DSO]) and not(classify[ISO]):
+			debug.error("{0}\n  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the file object's _SECTION_OBJECT_POINTERS), and one should exist!".format(file_name))
+		if not(classify[DSO]) and not(classify[SCM]) and not(classify[ISO]):
+			debug.error("all members of _SECTION_OBJECT_POINTERS are null, and they shouldn't be!")
+		if classify[SCM]:
+			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.process_address_space)
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
 			return (file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, self.vacb_node_size(file_size)) if vacb != 0 and vacb != None ])
-		if not(classify[0]) and not(classify[2]):
-			print "WARNING:", file_name
-			print "  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the file object's _SECTION_OBJECT_POINTERS), and one should exist!"
+		elif classify[DSO]:
+			# Use System processes Page Directory to dump memory mapped drivers/modules
+			debug.error("TODO: not yet implemented")
+		else:
+			# Use the processes Page Directory to dump memory mapped image file
+			debug.error("TODO: not yet implemented")
 
 	def dump_data(self, outfd, data, addr, start, end, section, base_dir):
 		header_str = "File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
@@ -188,13 +212,13 @@ class ExportFile(filescan.FileScan):
 		base_dir = re.sub(r'[\\:]', '/', self._config.dir + "/" + file_name)
 		last_page = 0
 		for page in range(0, max_page):
-			if self.process_address_space.is_valid_address(addr + page*(4*self.KB)): # FIXME
+			if self.process_address_space.is_valid_address(addr + page*(4*self.KB)):
 				if padding != "":
 					section_data += padding
 				padding = ""
 				if page > 0 and result == "":
 					last_page = page
-				result += self.process_address_space.read(addr + page*(4*self.KB), (4*self.KB)) # FIXME:
+				result += self.process_address_space.read(addr + page*(4*self.KB), (4*self.KB))
 			else:
 				padding += fill_char*(4*self.KB)
 				if result != "":
