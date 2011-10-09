@@ -40,19 +40,19 @@ import volatility.plugins.filescan as filescan
 class ExportFile(filescan.FileScan):
 	"""
 	Given a PID or _EPROCESS, and (optionally) a _FILE_OBJECT, extract the 
-	associated _FILE_OBJECT's from memory.
+	associated (or given) _FILE_OBJECT's from memory.
 	
-	Pages that can not be retrieved from memory are saved as pages filled in a 
-	given fill character.
+	Pages that can not be retrieved from memory are saved as pages filled in 
+	with a given fill character (--fill).
 	
-	Exported files are written to a user-defined dump directory. Contiguous 
-	retrievable pages are written to a file named using the retrieved virtual 
-	addresses. In addition, a "this" file is created (with the correct file 
-	size!) - this is an aggregation of the retrieved pages with non-retrievable 
-	pages substitued by fill-character pages.
-	All exported files are placed into a common directory whose name and path 
-	agree with that located in _FILE_OBJECT (modulo a unix/linux path naming 
-	convention).
+	Exported files are written to a user-defined dump directory (--dir). 
+	Contiguous retrievable pages are written to a file named using the 
+	retrieved virtual addresses. In addition, a "this" file is created (with 
+	the correct file size!) - this is an aggregation of the retrieved pages 
+	with non-retrievable pages substitued by fill-character pages (--fill).
+	All exported files are placed into a common directory (--dir) whose name 
+	and path agree with that located in _FILE_OBJECT (modulo a unix/linux path 
+	naming convention).
 	
 	This plugin is particularly useful when one expects memory (that holds the 
 	file's shared cache pages) to be fragmented, and so, linear carving 
@@ -98,7 +98,7 @@ class ExportFile(filescan.FileScan):
 
 	def __init__(self, config, *args):
 		filescan.FileScan.__init__(self, config, *args)
-		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character for padding out missing pages in shared file object caches")
+		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (in ASCII) for padding out missing pages in shared file object caches")
 		config.add_option("dir", short_option = 'D', default = ".", type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (physical address)")
@@ -148,32 +148,24 @@ class ExportFile(filescan.FileScan):
 	def read_large_integer(self, large_integer):
 		return large_integer.HighPart.v() * pow(2, 4 *8) + large_integer.LowPart.v()
 
-	def vacb_node_size(self, file_size):
-		if file_size < self._1MB:
-			return 1
-		elif file_size < 32*self.MB:
-			return 4
-		else:
-			return 128
+	def walk_vacb_tree(self, depth, ptr):
+		if depth < 1:
+			debug.error("consistency check failed (expected VACB tree to have a positive depth)")
+		if depth == 1:
+			return [ (obj.Object("_VACB", offset = ptr + 4*index, vm = self.process_address_space), index) for index in range(0, 128) ]
+		return [ (vacb, 128*index + section) for index in range(0, 128) for (vacb, section) in self.walk_vacb_tree(depth-1, ptr+4*index) ]
 
-	def read_vacbs_from_cache_map(self, shared_cache_map, node_size=1):
-		if node_size == 1:
-			return [ (shared_cache_map.Vacbs, 0) ]
-		elif node_size == 4:
-			return [ (shared_cache_map.Vacbs + node_size*index, index) for index in range(0, node_size) ]
-		elif node_size == 128:
-			# calculate vacb tree depth (see [1])
-			file_size = self.read_large_integer(shared_cache_map.FileSize)
-			tree_depth = math.ceil((math.ceil(math.log(file_size, 2)) - 18)/7)
-			# TODO: traverse vacb tree and grab vacb addresses
-			debug.error("TODO: not implemented yet!")
+	def read_vacbs_from_cache_map(self, shared_cache_map, file_size, depth = None, ptr = None):
+		if file_size < self._1MB:
+			return [ (shared_cache_map.InitialVacbs[index], index) for index in range(0, 4) ]
 		else:
-			debug.error("{0} is an invalid node size - nodes may only be 1, 4 or 128 element array(s)".format(node_size))
+			tree_depth = math.ceil((math.ceil(math.log(file_size, 2)) - 18)/7)
+			return self.walk_vacb_tree(tree_depth, shared_cache_map.Vacbs.v())
 
 	def dump_file_object(self, file_object):
 		file_name = self.parse_string(file_object.FileName)
 		if file_name == None:
-			debug.error("expected file name to be non-null!")
+			debug.error("consistency check failed (expected file name to be non-null)")
 		DSO = 0 # DataSectionObject
 		SCM = 1 # SharedCacheMap
 		ISO = 2 # ImageSectionObject
@@ -193,7 +185,9 @@ class ExportFile(filescan.FileScan):
 		if classify[SCM]:
 			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.process_address_space)
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
-			return (file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, self.vacb_node_size(file_size)) if vacb != 0 and vacb != None ])
+			if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
+				debug.error("consistency check failed (expected ValidDataLength to be bounded by file size)")
+			return (file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None ])
 		elif classify[DSO]:
 			# Use System processes Page Directory to dump memory mapped drivers/modules
 			debug.error("TODO: not yet implemented")
@@ -214,7 +208,7 @@ class ExportFile(filescan.FileScan):
 		section_data = ""
 		result = ""
 		padding = ""
-		fill_char = self._config.fill
+		fill_char = chr(self._config.fill % 256)
 		base_dir = re.sub(r'[\\:]', '/', self._config.dir + "/" + file_name)
 		last_page = 0
 		for page in range(0, max_page):
