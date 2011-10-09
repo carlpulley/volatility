@@ -40,4 +40,8 @@ Under Windows, file's will be loaded into memory as:
 The exportfile plugin will currently only extract files stored in the shared 
 cache map.
 
-This will change in the very near future.
+There is also an unpatched bug in the Volatility 2.0 filescan plugin (version 
+1116). This bug causes _FILE_OBJECT addresses to need an extra magic value of 
+#18 bytes adding to them!
+
+These limitations will change in the very near future.

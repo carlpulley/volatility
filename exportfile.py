@@ -104,7 +104,6 @@ class ExportFile(filescan.FileScan):
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (physical address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
 
-	# BUG: filescan plugin appears to calculate _FILE_OBJECT physical addresses which need #18 bytes adding to them?
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
@@ -153,7 +152,7 @@ class ExportFile(filescan.FileScan):
 	_1GB = GB
 
 	# TODO: remove this method (we should be relying on inherited filescan version) when the upstream 
-	#       filescan plugin is fixed to accomodate issue 151 on Volatility trunk.
+	#       filescan plugin is fixed to accomodate issue 151 on Volatility trunk (currently at 1116).
 	def parse_string(self, unicode_obj):
 		"""Unicode string parser"""
 		## We need to do this because the unicode_obj buffer is in
