@@ -178,7 +178,7 @@ class ExportFile(commands.command):
 		string = self.kernel_address_space.read(string_offset, string_length)
 		if not string:
 			return ''
-		return repr(string[:string_length].decode("utf16", "ignore").encode("utf8", "xmlcharrefreplace"))
+		return repr(string[:260].decode("utf16", "ignore").encode("utf8", "xmlcharrefreplace"))
 
 	def read_large_integer(self, large_integer):
 		return large_integer.HighPart.v() * pow(2, 4 *8) + large_integer.LowPart.v()
