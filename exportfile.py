@@ -37,6 +37,11 @@ import volatility.win32.tasks as tasks
 import volatility.debug as debug
 import volatility.plugins.filescan as filescan
 
+class ExportException(Exception):
+	"""General exception for handling warnings and errors during exporting of files"""
+	pass
+	
+
 class ExportFile(filescan.FileScan):
 	"""
 	Given a PID, _EPROCESS or _FILE_OBJECT, extract the associated (or given) 
@@ -123,7 +128,7 @@ class ExportFile(filescan.FileScan):
 		else:
 			try:
 				return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
-			except Exception, exn:
+			except ExportException as exn:
 				debug.error(exn)
 
 	def dump_from_eproc(self, eproc):
@@ -135,7 +140,7 @@ class ExportFile(filescan.FileScan):
 					file_obj = obj.Object("_FILE_OBJECT", h.Body.obj_offset, h.obj_vm)
 					try:
 						result += [ self.dump_file_object(file_obj) ]
-					except Exception as exn:
+					except ExportException as exn:
 						debug.warning(exn)
 		return filter(None, result)
 
@@ -181,7 +186,7 @@ class ExportFile(filescan.FileScan):
 
 	def walk_vacb_tree(self, depth, ptr):
 		if depth < 1:
-			raise Exception("consistency check failed (expected VACB tree to have a positive depth)")
+			raise ExportException("consistency check failed (expected VACB tree to have a positive depth)")
 		if depth == 1:
 			return [ (obj.Object("_VACB", offset = ptr + 4*index, vm = self.kernel_address_space), index) for index in range(0, 128) ]
 		return [ (vacb, 128*index + section) for index in range(0, 128) for (vacb, section) in self.walk_vacb_tree(depth-1, ptr+4*index) ]
@@ -196,10 +201,10 @@ class ExportFile(filescan.FileScan):
 	def dump_file_object(self, file_object):
 		file_name = self.parse_string(file_object.FileName)
 		if file_name == None:
-			raise Exception("consistency check failed (expected file name to be non-null)")
-		if file_name[0] == "\'":
+			raise ExportException("consistency check failed (expected file name to be non-null)")
+		if len(file_name) > 0 and file_name[0] == "\'":
 			file_name = file_name[1:]
-		if file_name[-1] == "\'":
+		if len(file_name) > 0 and file_name[-1] == "\'":
 			file_name = file_name[0:-1]
 		DSO = 0 # DataSectionObject
 		SCM = 1 # SharedCacheMap
@@ -214,21 +219,21 @@ class ExportFile(filescan.FileScan):
 			classify[ISO] = True
 
 		if not(classify[DSO]) and not(classify[ISO]):
-			raise Exception("{0}\n  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the file object's _SECTION_OBJECT_POINTERS), and one should exist!".format(file_name))
+			raise ExportException("{0}\n  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the _SECTION_OBJECT_POINTERS of _FILE_OBJECT @ 0x{1:X}), and one should exist!".format(file_name, file_object.v()))
 		if not(classify[DSO]) and not(classify[SCM]) and not(classify[ISO]):
-			raise Exception("all members of _SECTION_OBJECT_POINTERS are null, and they shouldn't be!")
+			raise ExportException("all members of _SECTION_OBJECT_POINTERS (of _FILE_OBJECT @ 0x{0:X}) are null, and they shouldn't be!".format(file_object.v()))
 		if classify[SCM]:
 			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.kernel_address_space)
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
 			if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
-				raise Exception("consistency check failed (expected ValidDataLength to be bounded by file size)")
+				raise ExportException("consistency check failed (expected ValidDataLength to be bounded by file size)")
 			return (file_object, file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None ])
 		elif classify[DSO]:
 			# Use System processes Page Directory to dump memory mapped drivers/modules?
-			raise Exception("TODO: not yet implemented")
+			raise ExportException("TODO: not yet implemented")
 		else:
 			# Use the processes Page Directory to dump memory mapped image file?
-			raise Exception("TODO: not yet implemented")
+			raise ExportException("TODO: not yet implemented")
 
 	def dump_pages(self, outfd, data, addr, start, end, section, base_dir):
 		with open("{0}/cache.0x{1:02X}-0x{2:02X}.dmp".format(base_dir, section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1), 'wb') as fobj:
@@ -236,13 +241,10 @@ class ExportFile(filescan.FileScan):
 		header_str = "Dumped File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
 		outfd.write(header_str)
 		outfd.write("\n")
-		outfd.write("*"*len(header_str))
-		outfd.write("\n")
 
 	def dump_section(self, outfd, file_object, addr, size, section, file_name):
-		outfd.write("Exporting [_FILE_OBJECT @ {0:X}]:\n  {1}\n".format(file_object.v(), file_name))
 		outfd.write("#"*20)
-		outfd.write("\n")
+		outfd.write("\nExporting [_FILE_OBJECT @ 0x{0:X}]:\n  {1}\n\n".format(file_object.v(), file_name))
 		max_page = (size/(4*self.KB)) + 1
 		section_data = ""
 		result = ""
