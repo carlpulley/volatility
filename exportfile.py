@@ -102,7 +102,7 @@ class ExportFile(filescan.FileScan):
 		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (in ASCII) for padding out missing pages in shared file object caches")
 		config.add_option("dir", short_option = 'D', type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
-		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (physical address)")
+		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
 
 	def calculate(self):
@@ -119,7 +119,6 @@ class ExportFile(filescan.FileScan):
 				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return self.dump_from_eproc(eproc_matches[0])
 		elif self._config.eproc:
-			# FIXME: _EPROCESS fails to run!
 			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.kernel_address_space))
 		else:
 			try:
@@ -243,6 +242,7 @@ class ExportFile(filescan.FileScan):
 	def dump_section(self, outfd, file_object, addr, size, section, file_name):
 		outfd.write("Exporting [_FILE_OBJECT @ {0:X}]:\n  {1}\n".format(file_object.v(), file_name))
 		outfd.write("#"*20)
+		outfd.write("\n")
 		max_page = (size/(4*self.KB)) + 1
 		section_data = ""
 		result = ""
