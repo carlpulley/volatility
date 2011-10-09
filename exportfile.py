@@ -39,16 +39,16 @@ import volatility.plugins.filescan as filescan
 
 class ExportFile(filescan.FileScan):
 	"""
-	Given a PID or _EPROCESS, and (optionally) a _FILE_OBJECT, extract the 
-	associated (or given) _FILE_OBJECT's from memory.
+	Given a PID, _EPROCESS or _FILE_OBJECT, extract the associated (or given) 
+	_FILE_OBJECT's from memory.
 	
 	Pages that can not be retrieved from memory are saved as pages filled in 
 	with a given fill character (--fill).
 	
 	Exported files are written to a user-defined dump directory (--dir). 
 	Contiguous retrievable pages are written to a file named using the 
-	retrieved virtual addresses. In addition, a "this" file is created (with 
-	the correct file size!) - this is an aggregation of the retrieved pages 
+	retrieved virtual addresses. In addition, a "this" file is created (a sector 
+	"copy" of the file on disk) - this is an aggregation of the retrieved pages 
 	with non-retrievable pages substitued by fill-character pages (--fill).
 	All exported files are placed into a common directory (--dir) whose name 
 	and path agree with that located in _FILE_OBJECT (modulo a unix/linux path 
@@ -107,26 +107,24 @@ class ExportFile(filescan.FileScan):
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
-		if not(bool(self._config.pid) ^ bool(self._config.eproc)):
-			if not(bool(self._config.pid) or bool(self._config.eproc)):
-				debug.error("exactly *ONE* of the options --pid or --eproc must be specified (you have not specified _any_ of these options)")
+		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.fobj)):
+			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.fobj)):
+				debug.error("exactly *ONE* of the options --pid, --eproc or --fobj must be specified (you have not specified _any_ of these options)")
 			else:
-				debug.error("exactly *ONE* of the options --pid or --eproc must be specified (you have specified _both_ of these options)")
+				debug.error("exactly *ONE* of the options --pid, --eproc or --fobj must be specified (you have used _multiple_ such options)")
 		if self._config.pid:
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
 			if len(eproc_matches) != 1:
 				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return self.dump_from_eproc(eproc_matches[0])
-		else:
+		elif self._config.eproc:
 			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.flat_address_space))
+		else:
+			return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
 
 	def dump_from_eproc(self, eproc):
-		self.process_address_space = eproc.get_process_address_space()
-		if self._config.fobj:
-			return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
-		else:
-			# FIXME: need to restrict _FILE_OBJECT's to the given _EPROCESS
-			return filter(None, [ self.dump_file_object(file_obj) for (object_obj, file_obj, name) in filescan.FileScan.calculate(self) if True ])
+		# FIXME: need to restrict _FILE_OBJECT's to the given _EPROCESS
+		return filter(None, [ self.dump_file_object(file_obj) for (object_obj, file_obj, name) in filescan.FileScan.calculate(self) if True ])
 
 	def render_text(self, outfd, data):
 		if not(self._config.dir):
@@ -172,7 +170,7 @@ class ExportFile(filescan.FileScan):
 		if depth < 1:
 			debug.error("consistency check failed (expected VACB tree to have a positive depth)")
 		if depth == 1:
-			return [ (obj.Object("_VACB", offset = ptr + 4*index, vm = self.process_address_space), index) for index in range(0, 128) ]
+			return [ (obj.Object("_VACB", offset = ptr + 4*index, vm = self.kernel_address_space), index) for index in range(0, 128) ]
 		return [ (vacb, 128*index + section) for index in range(0, 128) for (vacb, section) in self.walk_vacb_tree(depth-1, ptr+4*index) ]
 
 	def read_vacbs_from_cache_map(self, shared_cache_map, file_size, depth = None, ptr = None):
@@ -194,7 +192,7 @@ class ExportFile(filescan.FileScan):
 		SCM = 1 # SharedCacheMap
 		ISO = 2 # ImageSectionObject
 		classify = [ False, False, False ] # [ DSO != None, SCM != None, ISO != None ]
-		section_object_ptr = obj.Object('_SECTION_OBJECT_POINTERS', offset = file_object.SectionObjectPointer, vm = self.process_address_space)
+		section_object_ptr = obj.Object('_SECTION_OBJECT_POINTERS', offset = file_object.SectionObjectPointer, vm = self.kernel_address_space)
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
 			classify[DSO] = True
 		if section_object_ptr.SharedCacheMap != 0 and section_object_ptr.SharedCacheMap != None:
@@ -207,7 +205,7 @@ class ExportFile(filescan.FileScan):
 		if not(classify[DSO]) and not(classify[SCM]) and not(classify[ISO]):
 			debug.error("all members of _SECTION_OBJECT_POINTERS are null, and they shouldn't be!")
 		if classify[SCM]:
-			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.process_address_space)
+			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.kernel_address_space)
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
 			if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
 				debug.error("consistency check failed (expected ValidDataLength to be bounded by file size)")
@@ -238,13 +236,13 @@ class ExportFile(filescan.FileScan):
 		base_dir = re.sub(r'[\\:]', '/', self._config.dir + "/" + file_name)
 		last_page = 0
 		for page in range(0, max_page):
-			if self.process_address_space.is_valid_address(addr + page*(4*self.KB)):
+			if self.kernel_address_space.is_valid_address(addr + page*(4*self.KB)):
 				if padding != "":
 					section_data += padding
 				padding = ""
 				if page > 0 and result == "":
 					last_page = page
-				result += self.process_address_space.read(addr + page*(4*self.KB), (4*self.KB))
+				result += self.kernel_address_space.read(addr + page*(4*self.KB), (4*self.KB))
 			else:
 				padding += fill_char*(4*self.KB)
 				if result != "":
