@@ -28,21 +28,21 @@ This plugin implements the exporting and saving of _FILE_OBJECT's
 """
 
 import re
-import commands
+import commands as exe
 import os.path
 import math
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
 import volatility.debug as debug
-import volatility.plugins.filescan as filescan
+import volatility.commands as commands
 
 class ExportException(Exception):
 	"""General exception for handling warnings and errors during exporting of files"""
 	pass
 	
 
-class ExportFile(filescan.FileScan):
+class ExportFile(commands.command):
 	"""
 	Given a PID, _EPROCESS or _FILE_OBJECT, extract the associated (or given) 
 	_FILE_OBJECT's from memory.
@@ -103,7 +103,7 @@ class ExportFile(filescan.FileScan):
 		)
 
 	def __init__(self, config, *args):
-		filescan.FileScan.__init__(self, config, *args)
+		commands.command.__init__(self, config, *args)
 		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (in ASCII) for padding out missing pages in shared file object caches")
 		config.add_option("dir", short_option = 'D', type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
@@ -152,7 +152,7 @@ class ExportFile(filescan.FileScan):
 			# FIXME: fix this hacky way of creating directory structures
 			file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
 			if not(os.path.exists(file_name_path)):
-				commands.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
+				exe.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
 			for vacb, section in file_object:
 				with open("{0}/this".format(file_name_path), 'wb') as fobj:
 					fobj.write(self.dump_section(outfd, fobj_inst, vacb.BaseAddress, file_size, section, file_name))
@@ -171,11 +171,11 @@ class ExportFile(filescan.FileScan):
 	#       filescan plugin is fixed to accomodate issue 151 on Volatility trunk (currently at 1116).
 	def parse_string(self, unicode_obj):
 		"""Unicode string parser"""
-		## We need to do this because the unicode_obj buffer is in
-		## kernel_address_space
+		# We need to do this because the unicode_obj buffer is in
+		# kernel_address_space
 		string_length = unicode_obj.Length
 		string_offset = unicode_obj.Buffer
-
+        
 		string = self.kernel_address_space.read(string_offset, string_length)
 		if not string:
 			return ''
