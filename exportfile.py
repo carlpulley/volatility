@@ -167,8 +167,7 @@ class ExportFile(commands.command):
 	GB = _1KB**3
 	_1GB = GB
 
-	# TODO: remove this method (we should be relying on inherited filescan version) when the upstream 
-	#       filescan plugin is fixed to accomodate issue 151 on Volatility trunk (currently at 1116).
+	# TODO: monitor issue 151 on Volatility trunk
 	def parse_string(self, unicode_obj):
 		"""Unicode string parser"""
 		# We need to do this because the unicode_obj buffer is in
