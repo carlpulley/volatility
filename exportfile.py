@@ -99,7 +99,7 @@ class ExportFile(filescan.FileScan):
 	def __init__(self, config, *args):
 		filescan.FileScan.__init__(self, config, *args)
 		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (in ASCII) for padding out missing pages in shared file object caches")
-		config.add_option("dir", short_option = 'D', default = ".", type = 'str', action = 'store', help = "Directory in which to save exported files")
+		config.add_option("dir", short_option = 'D', type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (physical address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
@@ -116,7 +116,7 @@ class ExportFile(filescan.FileScan):
 		if self._config.pid:
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
 			if len(eproc_matches) != 1:
-				debug.error("-pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
+				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return self.dump_from_eproc(eproc_matches[0])
 		else:
 			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.flat_address_space))
@@ -129,12 +129,19 @@ class ExportFile(filescan.FileScan):
 			# FIXME: need to restrict _FILE_OBJECT's to the given _EPROCESS
 			return filter(None, [ self.dump_file_object(file_obj) for (object_obj, file_obj, name) in filescan.FileScan.calculate(self) if True ])
 
-	# TODO: implement outputing to --dir argument
 	def render_text(self, outfd, data):
-		for file_name, file_size, file_object in data:
+		if not(self._config.dir):
+			debug.error("--dir needs to be present")
+		base_dir = os.path.abspath(self._config.dir)
+		for fobj_inst, file_name, file_size, file_object in data:
+			# FIXME: fix this hacky way of creating directory structures
+			file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
+			if not(os.path.exists(file_name_path)):
+				commands.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
 			for vacb, section in file_object:
-				self.dump_section(outfd, vacb.BaseAddress, file_size, section, file_name)
-    
+				with open("{0}/this".format(file_name_path), 'wb') as fobj:
+					fobj.write(self.dump_section(outfd, fobj_inst, vacb.BaseAddress, file_size, section, file_name))
+
 	def render_sql(self, outfd, data):
 		debug.error("TODO: not implemented yet!")
 
@@ -144,7 +151,21 @@ class ExportFile(filescan.FileScan):
 	_1MB = MB
 	GB = _1KB**3
 	_1GB = GB
-	
+
+	# TODO: remove this method (we should be relying on inherited filescan version) when the upstream 
+	#       filescan plugin is fixed to accomodate issue 151 on Volatility trunk.
+	def parse_string(self, unicode_obj):
+		"""Unicode string parser"""
+		## We need to do this because the unicode_obj buffer is in
+		## kernel_address_space
+		string_length = unicode_obj.Length
+		string_offset = unicode_obj.Buffer
+
+		string = self.kernel_address_space.read(string_offset, string_length)
+		if not string:
+			return ''
+		return repr(string[:string_length].decode("utf16", "ignore").encode("utf8", "xmlcharrefreplace"))
+
 	def read_large_integer(self, large_integer):
 		return large_integer.HighPart.v() * pow(2, 4 *8) + large_integer.LowPart.v()
 
@@ -166,6 +187,10 @@ class ExportFile(filescan.FileScan):
 		file_name = self.parse_string(file_object.FileName)
 		if file_name == None:
 			debug.error("consistency check failed (expected file name to be non-null)")
+		if file_name[0] == "\'":
+			file_name = file_name[1:]
+		if file_name[-1] == "\'":
+			file_name = file_name[0:-1]
 		DSO = 0 # DataSectionObject
 		SCM = 1 # SharedCacheMap
 		ISO = 2 # ImageSectionObject
@@ -187,23 +212,25 @@ class ExportFile(filescan.FileScan):
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
 			if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
 				debug.error("consistency check failed (expected ValidDataLength to be bounded by file size)")
-			return (file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None ])
+			return (file_object, file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None ])
 		elif classify[DSO]:
-			# Use System processes Page Directory to dump memory mapped drivers/modules
+			# Use System processes Page Directory to dump memory mapped drivers/modules?
 			debug.error("TODO: not yet implemented")
 		else:
-			# Use the processes Page Directory to dump memory mapped image file
+			# Use the processes Page Directory to dump memory mapped image file?
 			debug.error("TODO: not yet implemented")
 
-	def dump_data(self, outfd, data, addr, start, end, section, base_dir):
-		header_str = "File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
+	def dump_pages(self, outfd, data, addr, start, end, section, base_dir):
+		with open("{0}/cache.0x{1:02X}-0x{2:02X}.dmp".format(base_dir, section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1), 'wb') as fobj:
+			fobj.write(data)
+		header_str = "Exported File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
 		outfd.write(header_str)
 		outfd.write("\n")
 		outfd.write("*"*len(header_str))
 		outfd.write("\n")
-		outfd.write(data)
 
-	def dump_section(self, outfd, addr, size, section, file_name):
+	def dump_section(self, outfd, file_object, addr, size, section, file_name):
+		outfd.write("Exporting [_FILE_OBJECT @ {0:X}]:\n  {1}\n".format(file_object.v(), file_name))
 		max_page = (size/(4*self.KB)) + 1
 		section_data = ""
 		result = ""
@@ -223,12 +250,12 @@ class ExportFile(filescan.FileScan):
 				padding += fill_char*(4*self.KB)
 				if result != "":
 					section_data += result
-					self.dump_data(outfd, result, addr + last_page*(4*self.KB), last_page, page, section, base_dir)
+					self.dump_pages(outfd, result, addr + last_page*(4*self.KB), last_page, page, section, base_dir)
 				result = ""
 		if padding != "":
 			section_data += padding
 		if result != "":
 			section_data += result
-			self.dump_data(outfd, result, addr + last_page*(4*self.KB), last_page, max_page, section, base_dir)
-		outfd.write(section_data)
+			self.dump_pages(outfd, result, addr + last_page*(4*self.KB), last_page, max_page, section, base_dir)
+		return section_data
     
