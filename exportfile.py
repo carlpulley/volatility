@@ -66,13 +66,26 @@ class ExportFile(commands.command):
 	reference [5] (below) for more information regarding some of the benefits 
 	of accessing files via the _FILE_OBJECT data structure.
 	
-	EXAMPLE 1: Memory Mapped
+	EXAMPLE:
 	
-	...TODO...
-	
-	EXAMPLE 2: Shared Cache Map
-	
-	...TODO...
+	_FILE_OBJECT at 0x81CE4868 is a file named:
+	  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
+	and has a shared cache map covering page addresses:
+	  0x43000 -> 0x45FFF
+	  0x47000 -> 0x47FFF
+	  0x51000 -> 0x52FFF
+	Then:
+	  volatility exportfile -f SAMPLE --fobj 0x82106940 --dir EXAMPLE
+	would produce:
+	  EXAMPLE/
+		Program Files/
+			Mozilla Firefox/
+			chrome/
+				en-US.jar/
+					this
+					cache.0x43000-0x45FFF.dmp
+					cache.0x47000-0x47FFF.dmp
+					cache.0x51000-0x52FFF.dmp
 	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
@@ -110,6 +123,7 @@ class ExportFile(commands.command):
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
 
+	# TODO: filter returned data to eliminate duplicate _FILE_OBJECT's (as returned from _EPROCESS objects)
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
