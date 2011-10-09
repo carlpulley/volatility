@@ -49,10 +49,11 @@ class ExportFile(filescan.FileScan):
 	Contiguous retrievable pages are written to a file named using the 
 	retrieved virtual addresses. In addition, a "this" file is created (a sector 
 	"copy" of the file on disk) - this is an aggregation of the retrieved pages 
-	with non-retrievable pages substitued by fill-character pages (--fill).
-	All exported files are placed into a common directory (--dir) whose name 
-	and path agree with that located in _FILE_OBJECT (modulo a unix/linux path 
-	naming convention).
+	with non-retrievable pages substitued by fill-character pages (--fill) and 
+	some manual file carving may be necessary to retrieve the original (disk) 
+	file contents. All exported files are placed into a common directory 
+	(--dir) whose name and path agree with that located in _FILE_OBJECT (modulo 
+	a unix/linux path naming convention).
 	
 	This plugin is particularly useful when one expects memory (that holds the 
 	file's shared cache pages) to be fragmented, and so, linear carving 
@@ -118,13 +119,26 @@ class ExportFile(filescan.FileScan):
 				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return self.dump_from_eproc(eproc_matches[0])
 		elif self._config.eproc:
-			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.flat_address_space))
+			# FIXME: _EPROCESS fails to run!
+			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.kernel_address_space))
 		else:
-			return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
+			try:
+				return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
+			except Exception, exn:
+				debug.error(exn)
 
 	def dump_from_eproc(self, eproc):
-		# FIXME: need to restrict _FILE_OBJECT's to the given _EPROCESS
-		return filter(None, [ self.dump_file_object(file_obj) for (object_obj, file_obj, name) in filescan.FileScan.calculate(self) if True ])
+		result = []
+		if eproc.ObjectTable.HandleTableList:
+			for h in eproc.ObjectTable.handles():
+				h.kas = self.kernel_address_space
+				if h.get_object_type() == "File":
+					file_obj = obj.Object("_FILE_OBJECT", h.Body.obj_offset, h.obj_vm)
+					try:
+						result += [ self.dump_file_object(file_obj) ]
+					except Exception as exn:
+						debug.warning(exn)
+		return filter(None, result)
 
 	def render_text(self, outfd, data):
 		if not(self._config.dir):
@@ -168,7 +182,7 @@ class ExportFile(filescan.FileScan):
 
 	def walk_vacb_tree(self, depth, ptr):
 		if depth < 1:
-			debug.error("consistency check failed (expected VACB tree to have a positive depth)")
+			raise Exception("consistency check failed (expected VACB tree to have a positive depth)")
 		if depth == 1:
 			return [ (obj.Object("_VACB", offset = ptr + 4*index, vm = self.kernel_address_space), index) for index in range(0, 128) ]
 		return [ (vacb, 128*index + section) for index in range(0, 128) for (vacb, section) in self.walk_vacb_tree(depth-1, ptr+4*index) ]
@@ -183,7 +197,7 @@ class ExportFile(filescan.FileScan):
 	def dump_file_object(self, file_object):
 		file_name = self.parse_string(file_object.FileName)
 		if file_name == None:
-			debug.error("consistency check failed (expected file name to be non-null)")
+			raise Exception("consistency check failed (expected file name to be non-null)")
 		if file_name[0] == "\'":
 			file_name = file_name[1:]
 		if file_name[-1] == "\'":
@@ -201,26 +215,26 @@ class ExportFile(filescan.FileScan):
 			classify[ISO] = True
 
 		if not(classify[DSO]) and not(classify[ISO]):
-			debug.error("{0}\n  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the file object's _SECTION_OBJECT_POINTERS), and one should exist!".format(file_name))
+			raise Exception("{0}\n  has no _CONTROL_AREA object (as no DataSectionObject and no ImageSectionObject exists for the file object's _SECTION_OBJECT_POINTERS), and one should exist!".format(file_name))
 		if not(classify[DSO]) and not(classify[SCM]) and not(classify[ISO]):
-			debug.error("all members of _SECTION_OBJECT_POINTERS are null, and they shouldn't be!")
+			raise Exception("all members of _SECTION_OBJECT_POINTERS are null, and they shouldn't be!")
 		if classify[SCM]:
 			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.kernel_address_space)
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
 			if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
-				debug.error("consistency check failed (expected ValidDataLength to be bounded by file size)")
+				raise Exception("consistency check failed (expected ValidDataLength to be bounded by file size)")
 			return (file_object, file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None ])
 		elif classify[DSO]:
 			# Use System processes Page Directory to dump memory mapped drivers/modules?
-			debug.error("TODO: not yet implemented")
+			raise Exception("TODO: not yet implemented")
 		else:
 			# Use the processes Page Directory to dump memory mapped image file?
-			debug.error("TODO: not yet implemented")
+			raise Exception("TODO: not yet implemented")
 
 	def dump_pages(self, outfd, data, addr, start, end, section, base_dir):
 		with open("{0}/cache.0x{1:02X}-0x{2:02X}.dmp".format(base_dir, section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1), 'wb') as fobj:
 			fobj.write(data)
-		header_str = "Exported File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
+		header_str = "Dumped File Offset Range: 0x%02X -> 0x%02X"%(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
 		outfd.write(header_str)
 		outfd.write("\n")
 		outfd.write("*"*len(header_str))
@@ -228,6 +242,7 @@ class ExportFile(filescan.FileScan):
 
 	def dump_section(self, outfd, file_object, addr, size, section, file_name):
 		outfd.write("Exporting [_FILE_OBJECT @ {0:X}]:\n  {1}\n".format(file_object.v(), file_name))
+		outfd.write("#"*20)
 		max_page = (size/(4*self.KB)) + 1
 		section_data = ""
 		result = ""
