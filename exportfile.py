@@ -54,7 +54,7 @@ class ExportFile(filescan.FileScan):
 	Contiguous retrievable pages are written to a file named using the 
 	retrieved virtual addresses. In addition, a "this" file is created (a sector 
 	"copy" of the file on disk) - this is an aggregation of the retrieved pages 
-	with non-retrievable pages substitued by fill-byte pages (--fill) and 
+	with non-retrievable pages substitued by fill-byte pages (--fill) and so,
 	some manual file carving may be necessary to retrieve the original (disk) 
 	file contents. All exported files are placed into a common directory 
 	(--dir) whose name and path agree with that located in _FILE_OBJECT (modulo 
@@ -110,7 +110,7 @@ class ExportFile(filescan.FileScan):
 		  0x43000 -> 0x45FFF
 	Then:
 	  volatility exportfile -f SAMPLE --pool --dir EXAMPLE2
-	would produce:
+	would produce (amongst other exported _FILE_OBJECT's):
 	  EXAMPLE2/
 		Program Files/
 		  Mozilla Firefox/
@@ -241,7 +241,7 @@ class ExportFile(filescan.FileScan):
 	GB = _1KB**3
 	_1GB = GB
 
-	# TODO: monitor issue 151 on Volatility trunk
+	# TODO: monitor issue 151 on Volatility trunk (following code is copied from FileScan)
 	def parse_string(self, unicode_obj):
 		"""Unicode string parser"""
 		# We need to do this because the unicode_obj buffer is in
@@ -296,17 +296,18 @@ class ExportFile(filescan.FileScan):
 		if not(classify[DSO]) and not(classify[SCM]) and not(classify[ISO]):
 			raise ExportException("all members of _SECTION_OBJECT_POINTERS (of _FILE_OBJECT @ 0x{0:X}) are null, and they shouldn't be!".format(file_object.v()))
 		if classify[SCM]:
+			# Shared Cache Map
 			shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.kernel_address_space)
 			file_size = self.read_large_integer(shared_cache_map.FileSize)
 			if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
 				raise ExportException("consistency check failed (expected ValidDataLength to be bounded by file size)")
 			return (file_object, file_name, file_size, [ (vacb, section) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None ])
 		elif classify[DSO]:
-			# Use System processes Page Directory to dump memory mapped drivers/modules?
-			raise ExportException("TODO: not yet implemented")
+			# Data Section Object
+			return self.dump_control_area(obj.Object("_CONTROL_AREA", offset = section_object_ptr.DataSectionObject, vm = self.kernel_address_space))
 		else:
-			# Use the processes Page Directory to dump memory mapped image file?
-			raise ExportException("TODO: not yet implemented")
+			# Image Section Object
+			return self.dump_control_area(obj.Object("_CONTROL_AREA", offset = section_object_ptr.ImageSectionObject, vm = self.kernel_address_space))
 
 	def dump_pages(self, outfd, data, addr, start, end, section, base_dir):
 		with open("{0}/cache.0x{1:02X}-0x{2:02X}.dmp".format(base_dir, section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1), 'wb') as fobj:
@@ -345,4 +346,7 @@ class ExportFile(filescan.FileScan):
 			section_data += result
 			self.dump_pages(outfd, result, addr + last_page*(4*self.KB), last_page, max_page, section, base_dir)
 		return section_data
+
+	def dump_control_area(self, control_area):
+		raise ExportException("TODO: not yet implemented")
     
