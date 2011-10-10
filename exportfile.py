@@ -58,8 +58,8 @@ class ExportFile(filescan.FileScan):
 	"direct"). In addition, a "this" file is created (a sector "copy" of the 
 	file on disk) - this is an aggregation of the retrieved pages with 
 	non-retrievable pages substitued by fill-byte pages (--fill) and so, some 
-	manual file carving may be necessary to retrieve the original (disk) file 
-	contents. All exported files are placed into a common directory (--dir) 
+	manual file carving may still be necessary to retrieve the original (disk) 
+	file contents. All exported files are placed into a common directory (--dir) 
 	whose name and path agree with that located in _FILE_OBJECT (modulo a 
 	unix/linux path naming convention).
 	
@@ -168,10 +168,10 @@ class ExportFile(filescan.FileScan):
 
 	def __init__(self, config, *args):
 		filescan.FileScan.__init__(self, config, *args)
-		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (byte) for padding out missing pages in shared file object caches")
+		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (byte) for padding out missing pages")
 		config.add_option("dir", short_option = 'D', type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
-		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (kernel address)")
+		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from an _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
 		config.add_option("pool", default = False, action = 'store_true', help = "Extract all _FILE_OBJECT's found by searching the pool")
 
@@ -245,7 +245,7 @@ class ExportFile(filescan.FileScan):
 				sorted_extracted_fobjs = sorted(extracted_file_data, key = lambda tup: tup[1])
 				for page, start_sector, end_sector in sorted_extracted_fobjs:
 					if page != None:
-						with open("{0}/direct.0x{1:08X}-0x{2:08X}.dmp".format(file_name_path, start_sector*(4*self.KB), end_sector*(4*self.KB)), 'wb') as fobj:
+						with open("{0}/direct.0x{1:08X}-0x{2:08X}.dmp".format(file_name_path, start_sector*512, end_sector*512), 'wb') as fobj:
 							fobj.write(page)
 						outfd.write("Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_sector*(4*self.KB), end_sector*(4*self.KB)))
 				# TODO: aggregate saved pages into a "this" file
@@ -360,8 +360,7 @@ class ExportFile(filescan.FileScan):
 		for subsection, index in zip(subsection_list, range(0, len(subsection_list))):
 			start_sector = subsection.StartingSector
 			num_of_sectors = subsection.NumberOfFullSectors
-			# TODO: correctly calculate where page holes go
-			result += [ (page, start_sector + pte_index, start_sector + pte_index + 8) for page, pte_index in self.read_pte_array(subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors ]
+			result += [ (page, start_sector + pte_index*8, start_sector + (pte_index + 1)*8) for page, pte_index in self.read_pte_array(subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
 		return result
 
 	def dump_pages(self, outfd, data, addr, start, end, section, base_dir):
