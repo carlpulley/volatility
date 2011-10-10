@@ -248,10 +248,19 @@ class ExportFile(filescan.FileScan):
 						with open("{0}/direct.0x{1:08X}-0x{2:08X}.dmp".format(file_name_path, start_sector*512, end_sector*512), 'wb') as fobj:
 							fobj.write(page)
 						outfd.write("Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_sector*(4*self.KB), end_sector*(4*self.KB)))
-				# TODO: aggregate saved pages into a "this" file
-				#last_sector = sorted_extracted_fobjs[-1][2]
-				#with open("{0}/this".format(file_name_path), 'wb') as fobj:
-				#	fobj.write(self.dump_sectors(outfd, fobj_inst, vacb.BaseAddress, file_size, section, file_name))
+				if len(sorted_extracted_fobjs) == 0:
+					last_sector = 0
+				else:
+					last_sector = sorted_extracted_fobjs[-1][2]
+				with open("{0}/this".format(file_name_path), 'wb') as fobj:
+					fill_page = chr(self._config.fill % 256)*(4*self.KB)
+					for sector in range(0, last_sector, 8):
+						page_search = [ (page, start_sector, end_sector) for page, start_sector, end_sector in sorted_extracted_fobjs if (start_sector <= sector) and (sector < end_sector) ]
+						if len(page_search) == 0:
+							fobj.write(fill_page)
+						else:
+							for page, start_sector, end_sector in page_search:
+								fobj.write(page)
 
 	def render_sql(self, outfd, data):
 		debug.error("TODO: not implemented yet!")

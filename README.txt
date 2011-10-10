@@ -32,9 +32,10 @@ option to the plugin command.
 CURRENT LIMITATIONS
 ===================
 
-There is  an unpatched bug in the Volatility 2.0 filescan plugin (version 1116). 
-This bug causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes 
-adding to them (so beware when using the --pool option!).
+There is an unpatched bug in the Volatility 2.0 filescan plugin. This bug 
+causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding 
+to them (so beware when using the --pool option or using _FILE_OBJECT addresses, 
+as returned by filescan, with the --fobj option!).
 
 When exporting files and multiple versions of the same page is saved to disk, 
 then the last page written is currently the page recovered!
