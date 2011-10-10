@@ -42,6 +42,6 @@ cache map.
 
 There is also an unpatched bug in the Volatility 2.0 filescan plugin (version 
 1116). This bug causes _FILE_OBJECT addresses to need an extra magic value of 
-#18 bytes adding to them!
+#18 bytes adding to them (so beware when using the --pool option!).
 
 These limitations will change in the very near future.
