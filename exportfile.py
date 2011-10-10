@@ -302,6 +302,7 @@ class ExportFile(filescan.FileScan):
 			tree_depth = math.ceil((math.ceil(math.log(file_size, 2)) - 18)/7)
 			return self.walk_vacb_tree(tree_depth, shared_cache_map.Vacbs.v())
 
+	# TODO: improve implementation of storage mechanism to export files from
 	def dump_file_object(self, file_object):
 		if not file_object.is_valid():
 			raise ExportException("consistency check failed (expected [_FILE_OBJECT @ 0x{0:08X}] to be a valid physical address)".format(file_object.v()))
@@ -347,18 +348,15 @@ class ExportFile(filescan.FileScan):
 			return []
 		return [ ptr ] + self.walk_subsections(ptr.NextSubsection)
 
-	# TODO: take into account the PTE flags when reading pages?
-	def read_pte_array(self, base_addr, num_of_ptes):
+	# TODO: take into account the PTE flags when reading pages (output via debug.warning?)
+	def read_pte_array(self, subsection, base_addr, num_of_ptes):
 		result = []
 		for pte in range(0, num_of_ptes):
-			if self.kernel_address_space.is_valid_address(base_addr + 4*pte):
-				(pte_addr, ) = struct.unpack('=I', self.kernel_address_space.read(base_addr + 4*pte, 4))
-				page_phy_addr = pte_addr & 0xFFFFF000
-				if page_phy_addr != 0 and self.flat_address_space.is_valid_address(page_phy_addr):
-					result += [ (self.flat_address_space.read(page_phy_addr, 4*self.KB), pte) ]
-				else:
-					result += [ (None, pte) ]
-			else:
+			(pte_addr, ) = struct.unpack('=I', self.kernel_address_space.read(base_addr + 4*pte, 4))
+			page_phy_addr = pte_addr & 0xFFFFF000
+			if page_phy_addr != 0 and self.flat_address_space.is_valid_address(page_phy_addr) and page_phy_addr != subsection.v():
+				result += [ (self.flat_address_space.read(page_phy_addr, 4*self.KB), pte) ]
+			elif page_phy_addr != 0:
 				result += [ (None, pte) ]
 		return result
 
@@ -369,7 +367,7 @@ class ExportFile(filescan.FileScan):
 		for subsection, index in zip(subsection_list, range(0, len(subsection_list))):
 			start_sector = subsection.StartingSector
 			num_of_sectors = subsection.NumberOfFullSectors
-			result += [ (page, start_sector + pte_index*8, start_sector + (pte_index + 1)*8) for page, pte_index in self.read_pte_array(subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
+			result += [ (page, start_sector + pte_index*8, start_sector + (pte_index + 1)*8) for page, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
 		return result
 
 	def dump_pages(self, outfd, data, addr, start, end, section, base_dir):
