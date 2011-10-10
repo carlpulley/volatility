@@ -32,16 +32,11 @@ option to the plugin command.
 CURRENT LIMITATIONS
 ===================
 
-Under Windows, file's will be loaded into memory as:
-  -memory mapped files (and so one needs to access contents via section objects
-   etc.)
-  -or, shared access files (and so one accesses the file via its shared cache 
-   map).
-The exportfile plugin will currently only extract files stored in the shared 
-cache map.
+There is  an unpatched bug in the Volatility 2.0 filescan plugin (version 1116). 
+This bug causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes 
+adding to them (so beware when using the --pool option!).
 
-There is also an unpatched bug in the Volatility 2.0 filescan plugin (version 
-1116). This bug causes _FILE_OBJECT addresses to need an extra magic value of 
-#18 bytes adding to them (so beware when using the --pool option!).
+When exporting files and multiple versions of the same page is saved to disk, 
+then the last page written is currently the page recovered!
 
 These limitations will change in the very near future.
