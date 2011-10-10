@@ -36,25 +36,25 @@ import volatility.obj as obj
 import volatility.win32.tasks as tasks
 import volatility.debug as debug
 import volatility.commands as commands
+import volatility.plugins.filescan as filescan
 
 class ExportException(Exception):
 	"""General exception for handling warnings and errors during exporting of files"""
 	pass
-	
 
-class ExportFile(commands.command):
+class ExportFile(filescan.FileScan):
 	"""
 	Given a PID, _EPROCESS or _FILE_OBJECT, extract the associated (or given) 
 	_FILE_OBJECT's from memory.
 	
 	Pages that can not be retrieved from memory are saved as pages filled in 
-	with a given fill character (--fill).
+	with a given fill byte (--fill).
 	
 	Exported files are written to a user-defined dump directory (--dir). 
 	Contiguous retrievable pages are written to a file named using the 
 	retrieved virtual addresses. In addition, a "this" file is created (a sector 
 	"copy" of the file on disk) - this is an aggregation of the retrieved pages 
-	with non-retrievable pages substitued by fill-character pages (--fill) and 
+	with non-retrievable pages substitued by fill-byte pages (--fill) and 
 	some manual file carving may be necessary to retrieve the original (disk) 
 	file contents. All exported files are placed into a common directory 
 	(--dir) whose name and path agree with that located in _FILE_OBJECT (modulo 
@@ -63,29 +63,74 @@ class ExportFile(commands.command):
 	This plugin is particularly useful when one expects memory (that holds the 
 	file's shared cache pages) to be fragmented, and so, linear carving 
 	techniques (e.g. using scalpel or foremost) might be expected to fail. See 
-	reference [5] (below) for more information regarding some of the benefits 
-	of accessing files via the _FILE_OBJECT data structure.
+	reference [5] (below) for more information regarding some of the forensic 
+	benefits of accessing files via the _FILE_OBJECT data structure.
 	
-	EXAMPLE:
+	EXAMPLE 1: Exporting a single FILE_OBJECT
 	
 	_FILE_OBJECT at 0x81CE4868 is a file named:
 	  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
-	and has a shared cache map covering page addresses:
+	with file size 20992 B and has a shared cache map covering page addresses:
 	  0x43000 -> 0x45FFF
 	  0x47000 -> 0x47FFF
 	  0x51000 -> 0x52FFF
 	Then:
-	  volatility exportfile -f SAMPLE --fobj 0x82106940 --dir EXAMPLE
+	  volatility exportfile -f SAMPLE --fobj 0x82106940 --dir EXAMPLE1 --fill 0xff
 	would produce:
-	  EXAMPLE/
+	  EXAMPLE1/
 		Program Files/
-			Mozilla Firefox/
-			chrome/
-				en-US.jar/
-					this
-					cache.0x43000-0x45FFF.dmp
-					cache.0x47000-0x47FFF.dmp
-					cache.0x51000-0x52FFF.dmp
+		  Mozilla Firefox/
+		    chrome/
+		      en-US.jar/
+		        this
+		        cache.0x43000-0x45FFF.dmp
+		        cache.0x47000-0x47FFF.dmp
+		        cache.0x51000-0x52FFF.dmp
+	Where this = fillpages(0xFF) 
+	             + cache.0x43000-0x45FFF.dmp 
+	             + fillPages(0xFF) 
+	             + cache.0x47000-0x47FFF.dmp 
+	             + fillPages(0xFF) 
+	             + cache.0x51000-0x52FFF.dmp
+	and fillPages(0xFF) is a collection of pages filled with the byte 0xFF.
+	
+	EXAMPLE 2: Exporting multiple _FILE_OBJECT's
+	
+	Paged pool contains the following two _FILE_OBJECT's:
+		1. _FILE_OBJECT at 0x81CE4868 is a file named:
+		  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
+		with file size 20992 B and has a shared cache map covering page addresses:
+		  0x43000 -> 0x45FFF
+		  0x47000 -> 0x47FFF
+		  0x51000 -> 0x52FFF
+		2. _FILE_OBJECT at 0x81CE4868 is a file named:
+		  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
+		with file size 20992 B and has a shared cache map covering page addresses:
+		  0x00 -> 0x2FFF
+		  0x43000 -> 0x45FFF
+	Then:
+	  volatility exportfile -f SAMPLE --pool --dir EXAMPLE2
+	would produce:
+	  EXAMPLE2/
+		Program Files/
+		  Mozilla Firefox/
+		    chrome/
+		      en-US.jar/
+		        this
+		        cache.0x00-0x2FFF.dmp
+		        cache.0x43000-0x45FFF.dmp
+		        cache.0x47000-0x47FFF.dmp
+		        cache.0x51000-0x52FFF.dmp
+	Where this = cache.0x00-0x2FFF.dmp
+	             +fillpages(0x0) 
+	             + cache.0x43000-0x45FFF.dmp 
+	             + fillPages(0x0) 
+	             + cache.0x47000-0x47FFF.dmp 
+	             + fillPages(0x0) 
+	             + cache.0x51000-0x52FFF.dmp
+	and fillPages(0x0) is a collection of pages filled with the byte 0x0.
+	
+	TODO: say something about how conflicting pages (i.e. cache.0x43000-0x45FFF.dmp) are overwritten
 	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
@@ -116,34 +161,40 @@ class ExportFile(commands.command):
 		)
 
 	def __init__(self, config, *args):
-		commands.command.__init__(self, config, *args)
-		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (in ASCII) for padding out missing pages in shared file object caches")
+		filescan.FileScan.__init__(self, config, *args)
+		config.add_option("fill", default = 0, type = 'int', action = 'store', help = "Fill character (byte) for padding out missing pages in shared file object caches")
 		config.add_option("dir", short_option = 'D', type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
+		config.add_option("pool", action = 'store', help = "Extract all _FILE_OBJECT's found by searching the pool")
 
-	# TODO: filter returned data to eliminate duplicate _FILE_OBJECT's (as returned from _EPROCESS objects)
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
-		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.fobj)):
-			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.fobj)):
-				debug.error("exactly *ONE* of the options --pid, --eproc or --fobj must be specified (you have not specified _any_ of these options)")
+		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.fobj) ^ bool(self._config.pool)):
+			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.fobj) or bool(self._config.pool)):
+				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have not specified _any_ of these options)")
 			else:
-				debug.error("exactly *ONE* of the options --pid, --eproc or --fobj must be specified (you have used _multiple_ such options)")
+				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have used _multiple_ such options)")
 		if self._config.pid:
+			# --pid
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
 			if len(eproc_matches) != 1:
 				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return self.dump_from_eproc(eproc_matches[0])
 		elif self._config.eproc:
+			# --eproc
 			return self.dump_from_eproc(obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.kernel_address_space))
-		else:
+		elif self._config.fobj:
+			# --fobj
 			try:
 				return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
 			except ExportException as exn:
 				debug.error(exn)
+		else:
+			# --pool
+			return self.dump_from_pool()
 
 	def dump_from_eproc(self, eproc):
 		result = []
@@ -156,6 +207,15 @@ class ExportFile(commands.command):
 						result += [ self.dump_file_object(file_obj) ]
 					except ExportException as exn:
 						debug.warning(exn)
+		return filter(None, result)
+
+	def dump_from_pool(self):
+		result = []
+		for object_obj, file_obj, name in filescan.FileScan.calculate(self):
+			try:
+				result += [ self.dump_file_object(file_obj) ]
+			except ExportException as exn:
+				debug.warning(exn)
 		return filter(None, result)
 
 	def render_text(self, outfd, data):
