@@ -32,6 +32,7 @@ import commands as exe
 import os.path
 import math
 import struct
+import hashlib
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
@@ -55,9 +56,11 @@ class ExportFile(filescan.FileScan):
 	Contiguous retrievable pages are written to a file named using the 
 	retrieved virtual addresses:
 	
-	  pages from _SHARED_CACHE_MAP are saved in files named cache.0xXX-0xXX.dmp
+	  pages from _SHARED_CACHE_MAP are saved in files named cache.0xXX-0xXX.dmp.MD5
 	
-	  pages from _CONTROL_AREA are saved in files named direct.0xXX-0xXX.dmp
+	  pages from _CONTROL_AREA are saved in files named direct.0xXX-0xXX.dmp.MD5
+	
+	where MD5 stands for the hash of the files contents.
 	
 	In addition, a "this" file is created (a sector "copy" of the file on disk) 
 	- this is an aggregated reconstruction based on the retrievable pages above 
@@ -91,15 +94,15 @@ class ExportFile(filescan.FileScan):
 		    chrome/
 		      en-US.jar/
 		        this
-		        cache.0x43000-0x45FFF.dmp
-		        cache.0x47000-0x47FFF.dmp
-		        cache.0x51000-0x52FFF.dmp
-	Where this = fillpages(0xFF) 
-	             + cache.0x43000-0x45FFF.dmp 
-	             + fillPages(0xFF) 
-	             + cache.0x47000-0x47FFF.dmp 
-	             + fillPages(0xFF) 
-	             + cache.0x51000-0x52FFF.dmp
+		        cache.0x43000-0x45FFF.dmp.MD5
+		        cache.0x47000-0x47FFF.dmp.MD5
+		        cache.0x51000-0x52FFF.dmp.MD5
+	Where this = fillpages(0xFF)
+	             + cache.0x43000-0x45FFF.dmp.MD5
+	             + fillPages(0xFF)
+	             + cache.0x47000-0x47FFF.dmp.MD5
+	             + fillPages(0xFF)
+	             + cache.0x51000-0x52FFF.dmp.MD5
 	and fillPages(0xFF) is a collection of pages filled with the byte 0xFF.
 	
 	EXAMPLE 2: Exporting multiple _FILE_OBJECT's
@@ -127,17 +130,17 @@ class ExportFile(filescan.FileScan):
 		    chrome/
 		      en-US.jar/
 		        this
-		        cache.0x00-0x2FFF.dmp
-		        cache.0x43000-0x45FFF.dmp
-		        cache.0x47000-0x47FFF.dmp
-		        cache.0x51000-0x52FFF.dmp
-	Where this = cache.0x00-0x2FFF.dmp
-	             +fillpages(0x0) 
-	             + cache.0x43000-0x45FFF.dmp 
-	             + fillPages(0x0) 
-	             + cache.0x47000-0x47FFF.dmp 
-	             + fillPages(0x0) 
-	             + cache.0x51000-0x52FFF.dmp
+		        cache.0x00-0x2FFF.dmp.MD5
+		        cache.0x43000-0x45FFF.dmp.MD5
+		        cache.0x47000-0x47FFF.dmp.MD5
+		        cache.0x51000-0x52FFF.dmp.MD5
+	Where this = cache.0x00-0x2FFF.dmp.MD5
+	             +fillpages(0x0)
+	             + cache.0x43000-0x45FFF.dmp.MD5
+	             + fillPages(0x0)
+	             + cache.0x47000-0x47FFF.dmp.MD5
+	             + fillPages(0x0)
+	             + cache.0x51000-0x52FFF.dmp.MD5
 	and fillPages(0x0) is a collection of pages filled with the byte 0x0.
 	
 	TODO: say something about how conflicting pages (i.e. cache.0x43000-0x45FFF.dmp) are overwritten
@@ -246,6 +249,7 @@ class ExportFile(filescan.FileScan):
 				elif data_type == "_CONTROL_AREA":
 					# _CONTROL_AREA processing
 					self.dump_control_pages(outfd, data, fobj_inst, file_name_path, extracted_file_data)
+				self.reconstruct_file(outfd, fobj_inst, file_name_path)
 
 	def render_sql(self, outfd, data):
 		debug.error("TODO: not implemented yet!")
@@ -370,17 +374,35 @@ class ExportFile(filescan.FileScan):
 			result += [ (page, start_sector + pte_index*num_of_sectors, start_sector + (pte_index + 1)*num_of_sectors) for page, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
 		return result
 
+	def dump_data(self, outfd, data, dump_file, start_addr, end_addr):
+		if not os.path.exists(dump_file):
+			with open(dump_file, 'wb') as fobj:
+				fobj.write(data)
+			outfd.write("Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_addr, end_addr))
+		else:
+			outfd.write("..Skipping File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_addr, end_addr))
+
 	def dump_shared_pages(self, outfd, data, file_object, file_name_path, file_size, extracted_file_data):
 		for vacb, start_addr, end_addr in extracted_file_data:
-			with open("{0}/cache.0x{1:08X}-0x{2:08X}.dmp".format(file_name_path, start_addr, end_addr), 'wb') as fobj:
-				fobj.write(vacb)
-			outfd.write("Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_addr, end_addr))
+			vacb_hash = hashlib.md5(vacb).hexdigest()
+			vacb_path = "{0}/cache.0x{1:08X}-0x{2:08X}.dmp.{3}".format(file_name_path, start_addr, end_addr, vacb_hash)
+			self.dump_data(outfd, vacb, vacb_path, start_addr, end_addr)
 
 	def dump_control_pages(self, outfd, data, file_object, file_name_path, extracted_file_data):
 		sorted_extracted_fobjs = sorted(extracted_file_data, key = lambda tup: tup[1])
 		for page, start_sector, end_sector in sorted_extracted_fobjs:
 			if page != None:
-				with open("{0}/direct.0x{1:08X}-0x{2:08X}.dmp".format(file_name_path, start_sector*512, (start_sector + 8)*512 - 1), 'wb') as fobj:
-					fobj.write(page)
-				outfd.write("Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_sector*512, (start_sector + 8)*512 - 1))
-    
+				start_addr = start_sector*512
+				end_addr = (start_sector + 8)*512 - 1
+				page_hash = hashlib.md5(page).hexdigest()
+				page_path = "{0}/direct.0x{1:08X}-0x{2:08X}.dmp.{3}".format(file_name_path, start_addr, end_addr, page_hash)
+				self.dump_data(outfd, page, page_path, start_addr, end_addr)
+
+	def reconstruct_file(self, outfd, file_object, file_name_path):
+		# TODO: 
+		fill_page = chr(self._config.fill % 256)*(4*self.KB)
+		# list files in file_name_path
+		# map file list to (file, start, end) tuples
+		# check and remove duplicate pages
+		# glue remaining file pages together
+		pass
