@@ -134,6 +134,19 @@ class ExportFile(filescan.FileScan):
 		        cache.0x43000-0x45FFF.dmp.MD5
 		        cache.0x47000-0x47FFF.dmp.MD5
 		        cache.0x51000-0x52FFF.dmp.MD5
+	If pages covering 0x43000 -> 0x45FFF are the same for both _FILE_OBJECT's, 
+	otherwise we have:
+	  EXAMPLE2/
+		Program Files/
+		  Mozilla Firefox/
+		    chrome/
+		      en-US.jar/
+		        this
+		        cache.0x00-0x2FFF.dmp.MD5
+		        cache.0x43000-0x45FFF.dmp.MD5a
+		        cache.0x43000-0x45FFF.dmp.MD5b
+		        cache.0x47000-0x47FFF.dmp.MD5
+		        cache.0x51000-0x52FFF.dmp.MD5
 	Where this = cache.0x00-0x2FFF.dmp.MD5
 	             +fillpages(0x0)
 	             + cache.0x43000-0x45FFF.dmp.MD5
@@ -143,7 +156,7 @@ class ExportFile(filescan.FileScan):
 	             + cache.0x51000-0x52FFF.dmp.MD5
 	and fillPages(0x0) is a collection of pages filled with the byte 0x0.
 	
-	TODO: say something about how conflicting pages (i.e. cache.0x43000-0x45FFF.dmp) are overwritten
+	TODO: say something further about how we resolve page clashes
 	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
