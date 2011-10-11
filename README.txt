@@ -41,7 +41,4 @@ causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding
 to them (so beware when using the --pool option or using _FILE_OBJECT addresses, 
 as returned by filescan, with the --fobj option!).
 
-When exporting files and multiple versions of the same page is saved to disk, 
-then the last page written is currently the page recovered!
-
 These limitations will change in the very near future.
