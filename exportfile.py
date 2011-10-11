@@ -243,25 +243,9 @@ class ExportFile(filescan.FileScan):
 				if data_type == "_SHARED_CACHE_MAP":
 					# _SHARED_CACHE_MAP processing
 					self.dump_shared_pages(outfd, data, fobj_inst, file_name_path, file_size, extracted_file_data)
-					#for vacb, section in extracted_file_data:
-					#	with open("{0}/this".format(file_name_path), 'wb') as fobj:
-					#		fobj.write(self.dump_section(outfd, fobj_inst, vacb.BaseAddress, file_size, section, file_name))
 				elif data_type == "_CONTROL_AREA":
 					# _CONTROL_AREA processing
 					self.dump_control_pages(outfd, data, fobj_inst, file_name_path, extracted_file_data)
-					#if len(sorted_extracted_fobjs) == 0:
-					#	last_sector = 0
-					#else:
-					#	last_sector = sorted_extracted_fobjs[-1][2]
-					#with open("{0}/this".format(file_name_path), 'wb') as fobj:
-					#	fill_page = chr(self._config.fill % 256)*(4*self.KB)
-					#	for sector in range(0, last_sector, 8):
-					#		page_search = [ (page, start_sector, end_sector) for page, start_sector, end_sector in sorted_extracted_fobjs if (start_sector <= sector) and (sector < end_sector) ]
-					#		if len(page_search) == 0:
-					#			fobj.write(fill_page)
-					#		else:
-					#			for page, start_sector, end_sector in page_search:
-					#				fobj.write(page)
 
 	def render_sql(self, outfd, data):
 		debug.error("TODO: not implemented yet!")
@@ -293,8 +277,7 @@ class ExportFile(filescan.FileScan):
 		if depth < 1:
 			raise ExportException("consistency check failed (expected VACB tree to have a positive depth)")
 		if depth == 1:
-			vacb = obj.Object("_VACB", offset = ptr + 4*index, vm = self.kernel_address_space)
-			return [ (vacb, index) for index in range(0, 128) ]
+			return [ (obj.Object("_VACB", offset = ptr + 4*index, vm = self.kernel_address_space), index) for index in range(0, 128) ]
 		return [ (vacb, 128*index + section) for index in range(0, 128) for (vacb, section) in self.walk_vacb_tree(depth-1, ptr+4*index) ]
 
 	def read_vacbs_from_cache_map(self, shared_cache_map, file_size, depth = None, ptr = None):
@@ -320,25 +303,29 @@ class ExportFile(filescan.FileScan):
 			# Shared Cache Map
 			try:
 				shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.kernel_address_space)
+				if shared_cache_map == None:
+					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected _SHARED_CACHE_MAP to be non-null)".format(file_object.v()))
+				if shared_cache_map.FileSize == None:
+					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected FileSize to be non-null)".format(file_object.v()))
 				file_size = self.read_large_integer(shared_cache_map.FileSize)
 				if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
 					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected ValidDataLength to be bounded by file size)".format(file_object.v()))
 				result += [ ("_SHARED_CACHE_MAP", file_object, file_name, file_size, self.dump_shared_cache_map(shared_cache_map, file_size)) ]
-			except Exception as exn:
+			except ExportException as exn:
 				debug.warning(exn)
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
 			# Data Section Object
 			try:
 				control_area = obj.Object("_CONTROL_AREA", offset = section_object_ptr.DataSectionObject, vm = self.kernel_address_space)
 				result += [ ("_CONTROL_AREA", file_object, file_name, None, self.dump_control_area(control_area)) ]
-			except Exception as exn:
+			except ExportException as exn:
 				debug.warning(exn)
 		if section_object_ptr.ImageSectionObject != 0 and section_object_ptr.ImageSectionObject != None:
 			# Image Section Object
 			try:
 				control_area = obj.Object("_CONTROL_AREA", offset = section_object_ptr.ImageSectionObject, vm = self.kernel_address_space)
 				result += [ ("_CONTROL_AREA", file_object, file_name, None, self.dump_control_area(control_area)) ]
-			except Exception as exn:
+			except ExportException as exn:
 				debug.warning(exn)
 		return result
 
@@ -351,6 +338,8 @@ class ExportFile(filescan.FileScan):
 	def read_pte_array(self, subsection, base_addr, num_of_ptes):
 		result = []
 		for pte in range(0, num_of_ptes):
+			if not(self.kernel_address_space.is_valid_address(base_addr + 4*pte)):
+				raise ExportException("consistency check failed (expected PTE to be at a valid address)")
 			(pte_addr, ) = struct.unpack('=I', self.kernel_address_space.read(base_addr + 4*pte, 4))
 			page_phy_addr = pte_addr & 0xFFFFF000
 			if page_phy_addr != 0 and self.flat_address_space.is_valid_address(page_phy_addr) and page_phy_addr != subsection.v():
@@ -360,7 +349,16 @@ class ExportFile(filescan.FileScan):
 		return result
 
 	def dump_shared_cache_map(self, shared_cache_map, file_size):
-		return [ (self.kernel_address_space.read(vacb.BaseAddress.v(), 256*self.KB), section*(256*self.KB), (section + 1)*(256*self.KB) - 1) for (vacb, section) in self.read_vacbs_from_cache_map(shared_cache_map, file_size) if vacb != 0 and vacb != None and self.kernel_address_space.is_valid_address(vacb.BaseAddress.v()) ]
+		# _VACB points to a 256KB area of paged memory. Parts of this memory may be paged out, so we perform a linear search, 
+		# through our set of _VACB page addresses, looking for valid in-memory pages.
+		result = []
+		for vacb, section in self.read_vacbs_from_cache_map(shared_cache_map, file_size):
+			if vacb != 0 and vacb != None:
+				vacb_base_addr = vacb.BaseAddress.v()
+				for page in range(0, 64):
+					if self.kernel_address_space.is_valid_address(vacb_base_addr + page*(4*self.KB)):
+						result += [ (self.kernel_address_space.read(vacb_base_addr + page*(4*self.KB), (4*self.KB)), section*(256*self.KB) + page*(4*self.KB), section*(256*self.KB) + (page + 1)*(4*self.KB) - 1) ]
+		return result
 
 	def dump_control_area(self, control_area):
 		result = []
@@ -385,40 +383,4 @@ class ExportFile(filescan.FileScan):
 				with open("{0}/direct.0x{1:08X}-0x{2:08X}.dmp".format(file_name_path, start_sector*512, (start_sector + 8)*512 - 1), 'wb') as fobj:
 					fobj.write(page)
 				outfd.write("Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}\n".format(start_sector*512, (start_sector + 8)*512 - 1))
-
-	#def old_dump_pages(self, outfd, data, addr, start, end, section, base_dir):
-	#	with open("{0}/cache.0x{1:08X}-0x{2:08X}.dmp".format(base_dir, section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1), 'wb') as fobj:
-	#		fobj.write(data)
-	#	header_str = "Dumped File Offset Range: 0x{0:08X} -> 0x{1:08X}".format(section*(256*self.KB) + start*(4*self.KB), section*(256*self.KB) + end*(4*self.KB) - 1)
-	#	outfd.write(header_str)
-	#	outfd.write("\n")
-    #
-	#def dump_section(self, outfd, file_object, addr, size, section, file_name):
-	#	max_page = (size/(4*self.KB)) + 1
-	#	section_data = ""
-	#	result = ""
-	#	padding = ""
-	#	fill_char = chr(self._config.fill % 256)
-	#	base_dir = re.sub(r'[\\:]', '/', self._config.dir + "/" + file_name)
-	#	last_page = 0
-	#	for page in range(0, max_page):
-	#		if self.kernel_address_space.is_valid_address(addr + page*(4*self.KB)):
-	#			if padding != "":
-	#				section_data += padding
-	#			padding = ""
-	#			if page > 0 and result == "":
-	#				last_page = page
-	#			result += self.kernel_address_space.read(addr + page*(4*self.KB), (4*self.KB))
-	#		else:
-	#			padding += fill_char*(4*self.KB)
-	#			if result != "":
-	#				section_data += result
-	#				self.dump_pages(outfd, result, addr + last_page*(4*self.KB), last_page, page, section, base_dir)
-	#			result = ""
-	#	if padding != "":
-	#		section_data += padding
-	#	if result != "":
-	#		section_data += result
-	#		self.dump_pages(outfd, result, addr + last_page*(4*self.KB), last_page, max_page, section, base_dir)
-	#	return section_data
     
