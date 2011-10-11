@@ -107,54 +107,10 @@ class ExportFile(filescan.FileScan):
 	
 	EXAMPLE 2: Exporting multiple _FILE_OBJECT's
 	
-	Paged pool contains the following two _FILE_OBJECT's:
-		1. _FILE_OBJECT at 0x81CE4868 is a file named:
-		  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
-		with file size 20992 B and has recoverable pages in memory covering file 
-		offsets:
-		  0x43000 -> 0x45FFF
-		  0x47000 -> 0x47FFF
-		  0x51000 -> 0x52FFF
-		2. _FILE_OBJECT at 0x81CE4868 is a file named:
-		  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
-		with file size 20992 B and has recoverable pages in memory covering file 
-		offsets:
-		  0x00 -> 0x2FFF
-		  0x43000 -> 0x45FFF
-	Then:
-	  volatility exportfile -f SAMPLE --pool --dir EXAMPLE2
-	would produce (amongst other exported _FILE_OBJECT's):
-	  EXAMPLE2/
-		Program Files/
-		  Mozilla Firefox/
-		    chrome/
-		      en-US.jar/
-		        this
-		        cache.0x00-0x2FFF.dmp.MD5
-		        cache.0x43000-0x45FFF.dmp.MD5
-		        cache.0x47000-0x47FFF.dmp.MD5
-		        cache.0x51000-0x52FFF.dmp.MD5
-	If pages covering 0x43000 -> 0x45FFF are the same for both _FILE_OBJECT's, 
-	otherwise we have:
-	  EXAMPLE2/
-		Program Files/
-		  Mozilla Firefox/
-		    chrome/
-		      en-US.jar/
-		        this
-		        cache.0x00-0x2FFF.dmp.MD5
-		        cache.0x43000-0x45FFF.dmp.MD5a
-		        cache.0x43000-0x45FFF.dmp.MD5b
-		        cache.0x47000-0x47FFF.dmp.MD5
-		        cache.0x51000-0x52FFF.dmp.MD5
-	Where this = cache.0x00-0x2FFF.dmp.MD5
-	             +fillpages(0x0)
-	             + cache.0x43000-0x45FFF.dmp.MD5
-	             + fillPages(0x0)
-	             + cache.0x47000-0x47FFF.dmp.MD5
-	             + fillPages(0x0)
-	             + cache.0x51000-0x52FFF.dmp.MD5
-	and fillPages(0x0) is a collection of pages filled with the byte 0x0.
+	Things here, are similar to EXAMPLE 1. However, page clashes (i.e. when two 
+	distinct _FILE_OBJECT's have a set of page addresses in common, but the 
+	respective contents of those pages are different) need to be resolved 
+	somehow.
 	
 	TODO: say something further about how we resolve page clashes
 	
