@@ -105,12 +105,12 @@ class ExportFile(filescan.FileScan):
 	             + cache.0x51000-0x52FFF.dmp.MD5
 	and fillPages(0xFF) is a collection of pages filled with the byte 0xFF.
 	
-	EXAMPLE 2: Exporting multiple _FILE_OBJECT's
+	EXAMPLE 2: File Reconstruction
 	
-	Things here, are similar to EXAMPLE 1. However, page clashes (i.e. when two 
-	distinct _FILE_OBJECT's have a set of page addresses in common, but the 
-	respective contents of those pages are different) need to be resolved 
-	somehow.
+	Things here are broadly similar to EXAMPLE 1 (i.e. "glue" pages together 
+	with fill pages for padding). However, when two distinct _FILE_OBJECT's 
+	have a set of page addresses in common, but the respective contents of 
+	those pages are different, we need to resolve this conflict somehow.
 	
 	TODO: say something further about how we resolve page clashes
 	
