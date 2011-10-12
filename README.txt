@@ -38,6 +38,9 @@ As the exportfile plugin is currently being worked upon, file reconstruction
 (i.e. "this") has been removed. This code is currently being reworked and will 
 be added back in again very soon.
 
+exportstack has not yet been fully ported across. It exists for information 
+purposes at the moment.
+
 There is an unpatched bug in the Volatility 2.0 filescan plugin. This bug 
 causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding 
 to them (so beware when using the --pool option or using _FILE_OBJECT addresses, 
