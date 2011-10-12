@@ -25,6 +25,8 @@ line option), when running Volatility 2.0.
 
   exportfile.py - this plugin implements the exporting and saving of 
                   _FILE_OBJECT's
+  exportstack.py - this plugin displays information regarding an _EPROCESS'es 
+                  thread data structures.
 
 For documentation on using these plugins, please use the Volatility 2.0 --help 
 option to the plugin command.
@@ -32,9 +34,9 @@ option to the plugin command.
 CURRENT LIMITATIONS
 ===================
 
-As the plugin is currently being worked upon, file reconstruction (i.e. "this") 
-has been removed. This code is currently being reworked and will be added back 
-in again very soon.
+As the exportfile plugin is currently being worked upon, file reconstruction 
+(i.e. "this") has been removed. This code is currently being reworked and will 
+be added back in again very soon.
 
 There is an unpatched bug in the Volatility 2.0 filescan plugin. This bug 
 causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding 
