@@ -41,6 +41,11 @@ exportstack.py differs mainly in the fact that it attempts to perform a stack
 unwind, whilst threads does not currently do this. In addition, threads currently 
 displays a number of useful _ETHREAD members that exportstack.py does not.
 
+PLUGIN DEPENDENCIES
+===================
+
+exportstack.py uses the pydasm library (see http://code.google.com/p/libdasm/).
+
 CURRENT LIMITATIONS
 ===================
 
