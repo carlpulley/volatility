@@ -49,9 +49,6 @@ class ExportFile(filescan.FileScan):
 	Given a PID, _EPROCESS or _FILE_OBJECT, extract the associated (or given) 
 	_FILE_OBJECT's from memory.
 	
-	Pages that can not be retrieved from memory are saved as pages filled in 
-	with a given fill byte (--fill).
-	
 	Exported files are written to a user-defined dump directory (--dir). 
 	Contiguous retrievable pages are written to a file named using the 
 	retrieved virtual addresses:
@@ -61,6 +58,9 @@ class ExportFile(filescan.FileScan):
 	  pages from _CONTROL_AREA are saved in files named direct.0xXX-0xXX.dmp.MD5
 	
 	where MD5 stands for the hash of the files contents.
+	
+	Pages that can not be retrieved from memory are saved as pages filled in 
+	with a given fill byte (--fill).
 	
 	In addition, a "this" file is created (a sector "copy" of the file on disk) 
 	- this is an aggregated reconstruction based on the retrievable pages above 
@@ -105,7 +105,7 @@ class ExportFile(filescan.FileScan):
 	             + cache.0x51000-0x52FFF.dmp.MD5
 	and fillPages(0xFF) is a collection of pages filled with the byte 0xFF.
 	
-	EXAMPLE 2: File Reconstruction
+	EXAMPLE 2: Manual File Reconstruction (--reconstruct)
 	
 	Things here are broadly similar to EXAMPLE 1 (i.e. "glue" pages together 
 	with fill pages for padding). However, when two distinct _FILE_OBJECT's 
@@ -162,9 +162,6 @@ class ExportFile(filescan.FileScan):
 				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have not specified _any_ of these options)")
 			else:
 				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have used _multiple_ such options)")
-		if bool(self._config.reconstruct):
-			# --reconstruct
-			return []
 		if bool(self._config.pid):
 			# --pid
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
@@ -182,7 +179,7 @@ class ExportFile(filescan.FileScan):
 					# --reconstruct
 					return [ (file_object, self.parse_string(file_object.FileName)) ]
 				else:
-					return filter(None, [ self.dump_file_object(file_object)) ])
+					return filter(None, [ self.dump_file_object(file_object) ])
 			except ExportException as exn:
 				debug.error(exn)
 		else:
@@ -225,9 +222,9 @@ class ExportFile(filescan.FileScan):
 			# Perform no file extraction, simply reconstruct existing extracted file pages
 			for file_object, file_name in data:
 				file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
-				self.reconstruct_file(outfd, file_object, file_name_path):
+				self.reconstruct_file(outfd, file_object, file_name_path)
 		else:
-			# Process extracted fiel page data and then perform file reconstruction upon the results
+			# Process extracted file page data and then perform file reconstruction upon the results
 			for file_data in data:
 				for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
 					# FIXME: fix this hacky way of creating directory structures
@@ -393,7 +390,7 @@ class ExportFile(filescan.FileScan):
 
 	def reconstruct_file(self, outfd, file_object, file_name_path):
 		# TODO: 
-		debug.info("Reconstructing [_FILE_OBJECT @ 0x{0:08X}] extracted memory pages in:\n  {1}\n".format(file_object.v(), file_name_path))
+		outfd.write("[_FILE_OBJECT @ 0x{0:08X}] Reconstructing extracted memory pages from:\n  {1}\n".format(file_object.v(), file_name_path))
 		fill_page = chr(self._config.fill % 256)*(4*self.KB)
 		# list files in file_name_path
 		# map file list to (file, start, end) tuples
