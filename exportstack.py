@@ -239,7 +239,7 @@ class ExportStack(filescan.FileScan):
 		try:
 			return ["Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting", "Transition", "DeferredReady", "GateWait"][state]
 		except:
-			return "{0} is an unknown thread state!".format(state)
+			return "0x{0:08X} is an unknown thread state!".format(state)
 
 	def unwind_stack(self, outfd, stack_frames):
 		if stack_frames == []:
@@ -264,14 +264,32 @@ class ExportStack(filescan.FileScan):
 	def dump_trap_frame(self, outfd, trap_frame, title="User"):
 		outfd.write("\n")
 		outfd.write("  {0} Mode Registers:\n".format(title))
-		for reg in ['Eip', 'Esp', 'Ebp', 'Eax']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		for reg in ['Eip', 'Esp', 'Ebp', 'Err']:
+			if reg == 'Esp':
+				data_reg = 'HardwareEsp'
+			elif reg == 'Err':
+				data_reg = 'ErrCode'
+			else:
+				data_reg = reg
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
 		outfd.write("\n")
-		for reg in ['Ebx', 'Ecx', 'Edx', 'Edi']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		for reg in ['Eax', 'Ebx', 'Ecx', 'Edx']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
 		outfd.write("\n")
-		for reg in ['Esi']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		for reg in ['Esi', 'Edi']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
+		outfd.write("\n")
+		for reg, data_reg in [('CS', 'SegCs'), ('SS', 'HardwareSegSs'), ('DS', 'SegDs'), ('ES', 'SegEs')]:
+			outfd.write("    {0}:  0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
+		outfd.write("\n")
+		for reg, data_reg in [('GS: ', 'SegGs'), ('EFlags:', 'EFlags')]:
+			outfd.write("    {0} 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
+		outfd.write("\n")
+		for reg in ['Dr0', 'Dr1', 'Dr2', 'Dr3']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
+		outfd.write("\n")
+		for reg in ['Dr6', 'Dr7']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
 		outfd.write("\n")
 		return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
 
@@ -288,7 +306,6 @@ class ExportStack(filescan.FileScan):
 		outfd.write("  User Time: {0}\n".format(ethread.Tcb.UserTime))
 		outfd.write("  State: {0}\n".format(self.get_kthread_state(ethread.Tcb.State)))
 		outfd.write("  TEB: 0x{0:08X}\n".format(ethread.Tcb.Teb))
-		# FIXME: 
 		if self.read_bitmap(ethread.CrossThreadFlags, 0):
 			outfd.write("  Terminated thread\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 1):
@@ -301,7 +318,7 @@ class ExportStack(filescan.FileScan):
 		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
-		esp = trap_frame.HardwareEsp.v() if True else ethread.Tcb.KernelStack.v()
+		esp = trap_frame.HardwareEsp.v() if trap_frame.is_valid() else ethread.Tcb.KernelStack.v() # FIXME: is this correct?
 		if esp >= 0x80000000:
 			outfd.write("  Current Stack [Kernel]\n")
 		else:
