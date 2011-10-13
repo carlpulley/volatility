@@ -222,6 +222,10 @@ class ExportFile(filescan.FileScan):
 			# Perform no file extraction, simply reconstruct existing extracted file pages
 			for file_object, file_name in data:
 				file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
+				if len(file_name_path) > 0 and file_name_path[0] == "\'":
+					file_name_path = file_name_path[1:]
+				if len(file_name_path) > 0 and file_name_path[-1] == "\'":
+					file_name_path = file_name_path[0:-1]
 				self.reconstruct_file(outfd, file_object, file_name_path)
 		else:
 			# Process extracted file page data and then perform file reconstruction upon the results
