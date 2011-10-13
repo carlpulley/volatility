@@ -24,7 +24,8 @@ To install these plugins simply include them (e.g. with the --plugins command
 line option), when running Volatility 2.0.
 
   exportfile.py - this plugin implements the exporting and saving of 
-                  _FILE_OBJECT's
+                  _FILE_OBJECT's. In addition, file reconstruction functionality 
+                  is offered by the plugin.
   exportstack.py - this plugin displays information regarding an _EPROCESS'es 
                   thread data structures.
 
