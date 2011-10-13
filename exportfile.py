@@ -150,6 +150,7 @@ class ExportFile(filescan.FileScan):
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from an _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
 		config.add_option("pool", default = False, action = 'store_true', help = "Extract all _FILE_OBJECT's found by searching the pool")
+		config.add_option("reconstruct", default = False, action = 'store_true', help = "Do not export file objects, perform file reconstruction on previously extracted file pages")
 
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
@@ -161,6 +162,9 @@ class ExportFile(filescan.FileScan):
 				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have not specified _any_ of these options)")
 			else:
 				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have used _multiple_ such options)")
+		if bool(self._config.reconstruct):
+			# --reconstruct
+			return []
 		if bool(self._config.pid):
 			# --pid
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
@@ -173,7 +177,12 @@ class ExportFile(filescan.FileScan):
 		elif bool(self._config.fobj):
 			# --fobj
 			try:
-				return filter(None, [ self.dump_file_object(obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)) ])
+				file_object = obj.Object("_FILE_OBJECT", offset = self._config.fobj, vm = self.flat_address_space)
+				if bool(self._config.reconstruct):
+					# --reconstruct
+					return [ (file_object, self.parse_string(file_object.FileName)) ]
+				else:
+					return filter(None, [ self.dump_file_object(file_object)) ])
 			except ExportException as exn:
 				debug.error(exn)
 		else:
@@ -188,7 +197,11 @@ class ExportFile(filescan.FileScan):
 				if h.get_object_type() == "File":
 					file_obj = obj.Object("_FILE_OBJECT", h.Body.obj_offset, h.obj_vm)
 					try:
-						result += [ self.dump_file_object(file_obj) ]
+						if bool(self._config.reconstruct):
+							# --reconstruct
+							result += [ (file_obj, self.parse_string(file_obj.FileName)) ]
+						else:
+							result += [ self.dump_file_object(file_obj) ]
 					except ExportException as exn:
 						debug.warning(exn)
 		return filter(None, result)
@@ -197,28 +210,39 @@ class ExportFile(filescan.FileScan):
 		result = []
 		for object_obj, file_obj, name in filescan.FileScan.calculate(self):
 			try:
-				result += [ self.dump_file_object(file_obj) ]
+				if bool(self._config.reconstruct):
+					# --reconstruct
+					result += [ (file_obj, name) ]
+				else:
+					result += [ self.dump_file_object(file_obj) ]
 			except ExportException as exn:
 				debug.warning(exn)
 		return filter(None, result)
 
 	def render_text(self, outfd, data):
 		base_dir = os.path.abspath(self._config.dir)
-		for file_data in data:
-			for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
-				# FIXME: fix this hacky way of creating directory structures
+		if bool(self._config.reconstruct):
+			# Perform no file extraction, simply reconstruct existing extracted file pages
+			for file_object, file_name in data:
 				file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
-				if not(os.path.exists(file_name_path)):
-					exe.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
-				outfd.write("#"*20)
-				outfd.write("\nExporting {0} [_FILE_OBJECT @ 0x{1:08X}]:\n  {2}\n\n".format(data_type, fobj_inst.v(), file_name))
-				if data_type == "_SHARED_CACHE_MAP":
-					# _SHARED_CACHE_MAP processing
-					self.dump_shared_pages(outfd, data, fobj_inst, file_name_path, file_size, extracted_file_data)
-				elif data_type == "_CONTROL_AREA":
-					# _CONTROL_AREA processing
-					self.dump_control_pages(outfd, data, fobj_inst, file_name_path, extracted_file_data)
-				self.reconstruct_file(outfd, fobj_inst, file_name_path)
+				self.reconstruct_file(outfd, file_object, file_name_path):
+		else:
+			# Process extracted fiel page data and then perform file reconstruction upon the results
+			for file_data in data:
+				for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
+					# FIXME: fix this hacky way of creating directory structures
+					file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
+					if not(os.path.exists(file_name_path)):
+						exe.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
+					outfd.write("#"*20)
+					outfd.write("\nExporting {0} [_FILE_OBJECT @ 0x{1:08X}]:\n  {2}\n\n".format(data_type, fobj_inst.v(), file_name))
+					if data_type == "_SHARED_CACHE_MAP":
+						# _SHARED_CACHE_MAP processing
+						self.dump_shared_pages(outfd, data, fobj_inst, file_name_path, file_size, extracted_file_data)
+					elif data_type == "_CONTROL_AREA":
+						# _CONTROL_AREA processing
+						self.dump_control_pages(outfd, data, fobj_inst, file_name_path, extracted_file_data)
+					self.reconstruct_file(outfd, fobj_inst, file_name_path)
 
 	def render_sql(self, outfd, data):
 		debug.error("TODO: not implemented yet!")
@@ -369,6 +393,7 @@ class ExportFile(filescan.FileScan):
 
 	def reconstruct_file(self, outfd, file_object, file_name_path):
 		# TODO: 
+		debug.info("Reconstructing [_FILE_OBJECT @ 0x{0:08X}] extracted memory pages in:\n  {1}\n".format(file_object.v(), file_name_path))
 		fill_page = chr(self._config.fill % 256)*(4*self.KB)
 		# list files in file_name_path
 		# map file list to (file, start, end) tuples
