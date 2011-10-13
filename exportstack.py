@@ -89,7 +89,7 @@ class ExportStack(filescan.FileScan):
 			if eproc.is_valid():
 				return [ eproc ]
 			else:
-				debug.error("--eproc needs to take a *VALID* _EPROCESS kernel address (could not find a valid _EPROCESS {0} in this memory image)".format(self._config.eproc))
+				debug.error("--eproc needs to take a *VALID* _EPROCESS kernel address (could not find a valid _EPROCESS 0x{0:08X} in this memory image)".format(self._config.eproc))
 
 	def render_text(self, outfd, data):
 		for eproc in data:
@@ -137,10 +137,10 @@ class ExportStack(filescan.FileScan):
 			current_stack_frames[0]['highlight'] = True
 		return old_stack_frames + current_stack_frames
 
-	def add_vadentry(self, addr, addr_space, types, vad_addr, level, storage):
-		StartingVpn = read_obj(addr_space, types, ['_MMVAD_LONG', 'StartingVpn'], vad_addr)  
+	def add_vadentry(self, addr, vad_addr, storage):
+		StartingVpn = obj.Object('_MMVAD_LONG', offset = vad_addr, vm = self.process_address_space).StartingVpn
 		StartingVpn = StartingVpn << 12
-		EndingVpn = read_obj(addr_space, types, ['_MMVAD_LONG', 'EndingVpn'], vad_addr)
+		EndingVpn = obj.Object('_MMVAD_LONG', offset = vad_addr, vm = self.process_address_space).EndingVpn
 		EndingVpn = ((EndingVpn+1) << 12) - 1
 		if StartingVpn <= addr and addr <= EndingVpn:
 			storage.append(vad_addr)
@@ -178,10 +178,12 @@ class ExportStack(filescan.FileScan):
 
 	def print_vadinfo(self, outfd, vadroot, addr, win32addr):
 		vad_nodes = []
-		traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(addr, addr_space, types, vad_addr, level, storage), None, None, 0, vad_nodes)
+		for vad in vadroot.traverse():
+			self.add_vadentry(addr, vad.v(), vad_nodes)
 		win32_vad_nodes = []
-		traverse_vad(None, self.eproc.vm, self.types, vadroot, lambda addr_space, types, vad_addr, level, storage: add_vadentry(win32addr, addr_space, types, vad_addr, level, storage), None, None, 0, win32_vad_nodes)
-		if win32addr != 0 and win32_vad_nodes == [] and vad_nodes == []:
+		for vad in vadroot.traverse():
+			self.add_vadentry(win32addr, vad.v(), win32_vad_nodes)
+		if win32addr != 0 and win32addr != None and win32_vad_nodes == [] and vad_nodes == []:
 			outfd.write("  Start Address: 0x{0:08X}\n".format(addr))
 			outfd.write("  Win32 Start Address: 0x{0:08X}\n".format(win32addr))
 		elif win32_vad_nodes != []:
@@ -262,7 +264,7 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  Hide thread from debugger\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 4):
 			outfd.write("  System thread\n")
-		self.print_vadinfo(outfd, eproc.VadRoot.v(), ethread.StartAddress.v(), ethread.Win32StartAddress.v())
+		self.print_vadinfo(outfd, eproc.VadRoot, ethread.StartAddress.v(), ethread.Win32StartAddress.v())
 		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.process_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
