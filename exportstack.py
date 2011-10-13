@@ -29,7 +29,10 @@ This plugin implements the exporting and saving of _FILE_OBJECT's
 
 import re
 import os.path
-import pydasm
+try:
+	import pydasm
+except ImportError:
+	print "pydasm is not installed, see http://code.google.com/p/libdasm/ for further information"
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
@@ -43,8 +46,9 @@ class ExportException(Exception):
 
 class ExportStack(filescan.FileScan):
 	"""
-	Given a PID or _EPROCESS object (kernel address), display information 
-	regarding the various stacks, registers, etc. for the processes threads.
+	Given a PID, _EPROCESS object (kernel address) or an _ETHREAD object 
+	(physical address), display information regarding the various stacks, 
+	registers, etc. for the processes threads.
 	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
@@ -52,6 +56,8 @@ class ExportStack(filescan.FileScan):
 	    Developer) 5th ed. Microsoft Press.
 	[2] Hewardt, M. & Pravat, D., 2007. Advanced Windows Debugging 1st ed. 
 	    Addison-Wesley Professional.
+	[3] Investigating Windows Threads with Volatility (accessed 13/Oct/2011):
+	    http://mnin.blogspot.com/2011/04/investigating-windows-threads-with.html
 	"""
 
 	meta_info = dict(
@@ -68,33 +74,47 @@ class ExportStack(filescan.FileScan):
 		filescan.FileScan.__init__(self, config, *args)
 		config.add_option("pid", type = 'int', action = 'store', help = "Export stack information using a given PID")
 		config.add_option("eproc", type = 'int', action = 'store', help = "Export stack information using an _EPROCESS offset (kernel address)")
+		config.add_option("ethrd", type = 'int', action = 'store', help = "Export stack information using an _ETHREAD offset (physical address)")
 
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
-		if not(bool(self._config.pid) ^ bool(self._config.eproc)):
-			if not(bool(self._config.pid) or bool(self._config.eproc)):
-				debug.error("exactly *ONE* of the options --pid or --eproc must be specified (you have not specified _any_ of these options)")
+		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.ethrd)):
+			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.eproc)):
+				debug.error("exactly *ONE* of the options --pid, --eproc or --ethrd must be specified (you have not specified _any_ of these options)")
 			else:
-				debug.error("exactly *ONE* of the options --pid or --eproc must be specified (you have used _multiple_ such options)")
+				debug.error("exactly *ONE* of the options --pid, --eproc or --ethrd must be specified (you have used _multiple_ such options)")
 		if bool(self._config.pid):
 			# --pid
 			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
 			if len(eproc_matches) != 1:
 				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
 			return [ eproc_matches[0] ]
-		else:
+		elif bool(self._config.eproc):
 			# --eproc
 			eproc = obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.kernel_address_space)
 			if eproc.is_valid():
 				return [ eproc ]
 			else:
 				debug.error("--eproc needs to take a *VALID* _EPROCESS kernel address (could not find a valid _EPROCESS 0x{0:08X} in this memory image)".format(self._config.eproc))
+		else:
+			# --ethrd
+			ethrd = obj.Object("_ETHREAD", offset = self._config.ethrd, vm = self.flat_address_space)
+			if ethrd.is_valid():
+				return [ ethrd ]
+			else:
+				debug.error("--ethrd needs to take a *VALID* _ETHREAD kernel address (could not find a valid _ETHREAD 0x{0:08X} in this memory image)".format(self._config.ethrd))
 
 	def render_text(self, outfd, data):
-		for eproc in data:
-			self.process_address_space = eproc.get_process_address_space()
-			self.carve_process_threads(outfd, eproc)
+		if bool(self._config.ethrd):
+			for ethrd in data:
+				eproc = ethrd.ThreadsProcess
+				self.process_address_space = eproc.get_process_address_space()
+				self.carve_thread(outfd, eproc, ethrd)
+		else:
+			for eproc in data:
+				self.process_address_space = eproc.get_process_address_space()
+				self.carve_process_threads(outfd, eproc)
 
 	highlight_colour_cursor = "\x1b[1;34;1m"
 	highlight_colour_frame = "\x1b[1;31;1m"
@@ -206,9 +226,9 @@ class ExportStack(filescan.FileScan):
 			data = ' '.join([ "{0:02X}".format(ord(x)) if x else '??' for x in [ self.process_address_space.read(address+N+i, 1) for i in range(0, width) ] ])
 			hexa = ''.join([ x.translate(FILTER) if x else '.' for x in [ self.process_address_space.read(address+N+i, 1) for i in range(0, width) ] ])
 			if highlight == address+N:
-				outfd.write("{0} => 0x{1:08X}{2} %-*s {3}\n".format(self.highlight_colour_cursor, address+N, "".join(self.colour_stack), width*3, data, hexa)) # FIXME: 
+				outfd.write("{0} => 0x{1:08X}{2} {3:{width}} {4}\n".format(self.highlight_colour_cursor, address+N, "".join(self.colour_stack), data, hexa, width=width*3))
 			else:
-				outfd.write("    0x{0:08X} %-*s {1}\n".format(address+N, width*3, data, hexa)) # FIXME: 
+				outfd.write("    0x{0:08X} {1:{width}} {2}\n".format(address+N, data, hexa, width=width*3))
 			N += width
 		outfd.write("\n")
 
@@ -231,10 +251,10 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  EIP: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, frame['eip'], "".join(self.colour_stack)))
 			outfd.write("  EBP: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, frame['ebp'], "".join(self.colour_stack)))
 			if frame['ebp'] >= 0x80:
-				dump_stack_frame(frame['ebp']-0x40, 0x8d, highlight=frame['ebp'])
+				self.dump_stack_frame(outfd, frame['ebp']-0x40, 0x8d, highlight=frame['ebp'])
 			if frame['eip'] > 0x20:
 				outfd.write("  Calling Code Dissassembly:\n")
-				disasm(frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
+				self.disasm(outfd, frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
 			if 'highlight' in frame:
 				self.colour_stack.pop()
 				outfd.write("\n".join(self.colour_stack))
@@ -244,18 +264,31 @@ class ExportStack(filescan.FileScan):
 	def dump_trap_frame(self, outfd, trap_frame, title="User"):
 		outfd.write("\n")
 		outfd.write("  {0} Mode Registers:\n".format(title))
-		for reg in ['Eip', 'Ebp', 'Eax', 'Ebx', 'Ecx', 'Edx', 'Edi', 'Esi']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
+		for reg in ['Eip', 'Esp', 'Ebp', 'Eax']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		outfd.write("\n")
+		for reg in ['Ebx', 'Ecx', 'Edx', 'Edi']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		outfd.write("\n")
+		for reg in ['Esi']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		outfd.write("\n")
 		return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
 
 	def carve_thread(self, outfd, eproc, ethread):
 		outfd.write("*"*20)
 		outfd.write("\n")
-		outfd.write("Process ID: {0}\n".format(ethread.Cid.UniqueProcess.v()))
-		outfd.write("Thread ID: {0}\n".format(ethread.Cid.UniqueThread.v()))
+		outfd.write("Process ID: {0} [_EPROCESS @ 0x{1:08X}]\n".format(ethread.Cid.UniqueProcess, eproc.v()))
+		if eproc.v() != ethread.Tcb.ApcState.Process.v():
+			outfd.write("  Attached to _EPROCESS: 0x{0:08X}\n".format(ethread.Tcb.ApcState.Process))
+		outfd.write("Thread ID: {0} [_ETHREAD @ 0x{1:08X}]\n".format(ethread.Cid.UniqueThread, ethread.v()))
+		outfd.write("  Created: {0}\n".format(ethread.CreateTime or "-"))
+		outfd.write("  Exited: {0}\n".format(ethread.ExitTime or "-"))
 		outfd.write("  Kernel Time: {0}\n".format(ethread.Tcb.KernelTime))
 		outfd.write("  User Time: {0}\n".format(ethread.Tcb.UserTime))
 		outfd.write("  State: {0}\n".format(self.get_kthread_state(ethread.Tcb.State)))
+		outfd.write("  TEB: 0x{0:08X}\n".format(ethread.Tcb.Teb))
+		# FIXME: 
 		if self.read_bitmap(ethread.CrossThreadFlags, 0):
 			outfd.write("  Terminated thread\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 1):
@@ -265,10 +298,10 @@ class ExportStack(filescan.FileScan):
 		if self.read_bitmap(ethread.CrossThreadFlags, 4):
 			outfd.write("  System thread\n")
 		self.print_vadinfo(outfd, eproc.VadRoot, ethread.StartAddress.v(), ethread.Win32StartAddress.v())
-		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.process_address_space)
+		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
-		esp = ethread.Tcb.KernelStack.v()
+		esp = trap_frame.HardwareEsp.v() if True else ethread.Tcb.KernelStack.v()
 		if esp >= 0x80000000:
 			outfd.write("  Current Stack [Kernel]\n")
 		else:
@@ -288,7 +321,7 @@ class ExportStack(filescan.FileScan):
 			outfd.write("    Limit: 0x{0:08X}\n".format(stack_limit))
 			if trap_frame.is_valid():
 				outfd.write("User Stack Unwind ==>\n")
-				self.unwind_stack(outfd, self.get_stack_frames(outfd, top_frame['ebp'], stack_base, stack_limit, top_frame['eip']))
+				self.unwind_stack(outfd, self.get_stack_frames(top_frame['ebp'], stack_base, stack_limit, top_frame['eip']))
 				outfd.write("<== End User Stack Unwind\n")
 				outfd.write("\n")
 			else:
@@ -304,8 +337,8 @@ class ExportStack(filescan.FileScan):
 		outfd.write("****************\n")
 		outfd.write("* User Threads *\n")
 		outfd.write("****************\n")
-		[ self.carve_thread(outfd, eproc, ethread) for ethread in eproc.ThreadListHead.dereference_as("_LIST_ENTRY").list_of_type("_ETHREAD", "ThreadListEntry") ]
+		[ self.carve_thread(outfd, eproc, ethread) for ethread in eproc.ThreadListHead.list_of_type("_ETHREAD", "ThreadListEntry") ]
 		outfd.write("***************\n")
 		outfd.write("* GUI Threads *\n")
 		outfd.write("***************\n")
-		[ self.carve_thread(outfd, eproc, ethread.Tcb.Win32Thread) for ethread in eproc.ThreadListHead.dereference_as("_LIST_ENTRY").list_of_type('_ETHREAD', 'ThreadListEntry') if ethread.Tcb.Win32Thread.is_valid() and ethread.Tcb.Win32Thread.offset >= 0x80000000 ]
+		[ self.carve_thread(outfd, eproc, ethread.Tcb.Win32Thread.dereference_as("_ETHREAD")) for ethread in eproc.ThreadListHead.list_of_type('_ETHREAD', 'ThreadListEntry') if ethread.Tcb.Win32Thread.is_valid() and ethread.Tcb.Win32Thread.v() >= 0x80000000 ]
