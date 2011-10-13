@@ -38,7 +38,7 @@ PLUGIN SIMILARITIES
 The exportstack.py plugin has a number of similarities to:
   http://code.google.com/p/volatility/wiki/CommandReference#threads
 exportstack.py differs mainly in the fact that it attempts to perform a stack 
-unwind whilst thread does not currently do this. In addition, threads currently 
+unwind, whilst threads does not currently do this. In addition, threads currently 
 displays a number of useful _ETHREAD members that exportstack.py does not.
 
 CURRENT LIMITATIONS
