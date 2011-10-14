@@ -355,7 +355,7 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  Hide thread from debugger\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 4):
 			outfd.write("  System thread\n")
-		self.print_vadinfo(outfd, eproc.VadRoot, ethread.StartAddress.v(), ethread.Win32StartAddress.v())
+		#self.print_vadinfo(outfd, eproc.VadRoot, ethread.StartAddress.v(), ethread.Win32StartAddress.v())
 		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
@@ -365,7 +365,6 @@ class ExportStack(filescan.FileScan):
 			outfd.write("\n  Currently Using the Kernel Stack\n\n")
 		else:
 			outfd.write("\n  Currently Using the User Stack\n\n")
-		# FIXME: what do the following do?
 		kstack_base = ethread.Tcb.InitialStack.v()
 		kstack_limit = ethread.Tcb.StackLimit.v()
 		outfd.write("  Kernel Stack\n")
@@ -376,8 +375,6 @@ class ExportStack(filescan.FileScan):
 			self.unwind_stack(outfd, self.get_stack_frames(ethread.Tcb.KernelStack.v(), kstack_base, kstack_limit), stack_type="kernel")
 			outfd.write("<== End Kernel Stack Unwind\n")
 			outfd.write("\n")
-		#outfd.write("\n  Current Esp: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, esp, "".join(self.colour_stack)))
-		#self.dump_stack_frame(outfd, esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp, stack_type="")
 		teb = obj.Object('_TEB', offset = ethread.Tcb.Teb.v(), vm = self.process_address_space)
 		if teb.is_valid():
 			ustack_base = teb.NtTib.StackBase.v()
