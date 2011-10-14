@@ -50,6 +50,17 @@ class ExportStack(filescan.FileScan):
 	(physical address), display information regarding the various stacks, 
 	registers, etc. for the processes threads.
 	
+	Stack unwinding functions by attempting to follow the EBP register entries 
+	in each stack frame. Unwinding occurs in both an upwards (i.e. stack 
+	decrementation on x86) and a downwards direction (i.e. stack 
+	incrementation on x86). The textual stack unwinding colours the current 
+	(i.e. ESP points into this frame) stack frame red. Stack frames above the 
+	red or current frame are located via a linear search for EBP chain 
+	candidates.
+	
+	NB: This plugin has functionality overlaps with Michael Hale Ligh's threads 
+	plugin (see http://code.google.com/p/volatility/wiki/CommandReference).
+	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
 	    Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro 
@@ -126,6 +137,7 @@ class ExportStack(filescan.FileScan):
 		def stack_frame_iterator_up():
 			ebp = start_ebp
 			ebp_ptr = start_ebp - 4
+			# FIXME: shouldn't we have something like stack_base +/- stack_limit here?
 			while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
 				if not self.process_address_space.is_valid_address(ebp_ptr):
 					ebp_ptr -= 1
@@ -133,7 +145,7 @@ class ExportStack(filescan.FileScan):
 					ebp_value = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr))
 					if ebp_value == ebp:
 						ebp = ebp_ptr
-						eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr+4))
+						eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr-4))
 						yield { 'eip':eip, 'ebp':ebp }
 						ebp_ptr -= 4
 					else:
@@ -142,6 +154,7 @@ class ExportStack(filescan.FileScan):
 			if start_eip != None:
 				yield { 'eip':start_eip, 'ebp':start_ebp }
 			ebp = start_ebp
+			# FIXME: shouldn't we have something like stack_base +/- stack_limit here?
 			while stack_base >= ebp and ebp > stack_limit:
 				if not self.process_address_space.is_valid_address(ebp):
 					return
@@ -197,6 +210,7 @@ class ExportStack(filescan.FileScan):
 				offset += 4
 
 	def print_vadinfo(self, outfd, vadroot, addr, win32addr):
+		# FIXME: what are we doing here?
 		vad_nodes = []
 		for vad in vadroot.traverse():
 			self.add_vadentry(addr, vad.v(), vad_nodes)
@@ -264,13 +278,7 @@ class ExportStack(filescan.FileScan):
 	def dump_trap_frame(self, outfd, trap_frame, title="User"):
 		outfd.write("\n")
 		outfd.write("  {0} Mode Registers:\n".format(title))
-		for reg in ['Eip', 'Esp', 'Ebp', 'Err']:
-			if reg == 'Esp':
-				data_reg = 'HardwareEsp'
-			elif reg == 'Err':
-				data_reg = 'ErrCode'
-			else:
-				data_reg = reg
+		for reg, data_reg in [('Eip', 'Eip'), ('Esp', 'HardwareEsp'), ('Ebp', 'Ebp'), ('Err', 'ErrCode')]:
 			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
 		outfd.write("\n")
 		for reg in ['Eax', 'Ebx', 'Ecx', 'Edx']:
@@ -323,6 +331,7 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  Current Stack [Kernel]\n")
 		else:
 			outfd.write("  Current Stack [User]\n")
+		# FIXME: what do the following do?
 		stack_base = ethread.Tcb.InitialStack.v()
 		stack_limit = ethread.Tcb.StackLimit.v()
 		outfd.write("    Base: 0x{0:08X}\n".format(stack_base))
