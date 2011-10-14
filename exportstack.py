@@ -40,6 +40,21 @@ import volatility.debug as debug
 import volatility.commands as commands
 import volatility.plugins.filescan as filescan
 
+w32_types = {
+	'_W32THREAD' : [ 0x28, { \
+		'pEThread' : [ 0x0, ['pointer', ['_ETHREAD']]], \
+		'RefCount' : [ 0x4, ['unsigned long'] ], \
+		'ptlW32' : [ 0x8, ['pointer', ['void']] ], \
+		'pgdiDcattr' : [ 0xc, ['pointer', ['void']] ], \
+		'pgdiBrushAttr' : [ 0x10, ['pointer', ['void']] ], \
+		'pUMPDObjs' : [ 0x14, ['pointer', ['void']] ], \
+		'pUMPDHeap' : [ 0x18, ['pointer', ['void']] ], \
+		'dwEngAcquireCount' : [ 0x1c, ['pointer', ['unsigned long']] ], \
+		'pSemTable' : [ 0x20, ['pointer', ['void']] ], \
+		'pUMPDObj' : [ 0x24, ['pointer', ['void']] ] \
+	}]
+}
+
 class ExportException(Exception):
 	"""General exception for handling warnings and errors during exporting of stacks"""
 	pass
@@ -50,6 +65,17 @@ class ExportStack(filescan.FileScan):
 	(physical address), display information regarding the various stacks, 
 	registers, etc. for the processes threads.
 	
+	Stack unwinding functions by attempting to follow the EBP register entries 
+	in each stack frame. Unwinding occurs in both an upwards (i.e. stack 
+	decrementation on x86) and a downwards direction (i.e. stack 
+	incrementation on x86). The textual stack unwinding colours the current 
+	(i.e. ESP points into this frame) stack frame red. Stack frames above the 
+	red or current frame are located via a linear search for EBP chain 
+	candidates. Attempts are made to unwind both the user and kernel stacks.
+	
+	NB: This plugin has functionality overlaps with Michael Hale Ligh's threads 
+	plugin (see http://code.google.com/p/volatility/wiki/CommandReference).
+	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
 	    Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro 
@@ -58,6 +84,8 @@ class ExportStack(filescan.FileScan):
 	    Addison-Wesley Professional.
 	[3] Investigating Windows Threads with Volatility (accessed 13/Oct/2011):
 	    http://mnin.blogspot.com/2011/04/investigating-windows-threads-with.html
+	[4] Part 1: Processes, Threads, Fibers and Jobs (accessed 14/Oct/2011):
+	    http://www.alex-ionescu.com/BH08-AlexIonescu.pdf
 	"""
 
 	meta_info = dict(
@@ -78,6 +106,7 @@ class ExportStack(filescan.FileScan):
 
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
+		self.kernel_address_space.profile.add_types(w32_types)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
 		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.ethrd)):
 			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.eproc)):
@@ -124,9 +153,11 @@ class ExportStack(filescan.FileScan):
 
 	def get_stack_frames(self, start_ebp, stack_base, stack_limit, start_eip=None):
 		def stack_frame_iterator_up():
+			# Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
 			ebp = start_ebp
 			ebp_ptr = start_ebp - 4
 			while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
+				# FIXME: check the alignment of stack frames (might be able to decrement with larger values?)
 				if not self.process_address_space.is_valid_address(ebp_ptr):
 					ebp_ptr -= 1
 				else:
@@ -139,6 +170,7 @@ class ExportStack(filescan.FileScan):
 					else:
 						ebp_ptr -= 1
 		def stack_frame_iterator_down():
+			# Follow the EBP chain downloads and so locate stack frames
 			if start_eip != None:
 				yield { 'eip':start_eip, 'ebp':start_ebp }
 			ebp = start_ebp
@@ -197,6 +229,7 @@ class ExportStack(filescan.FileScan):
 				offset += 4
 
 	def print_vadinfo(self, outfd, vadroot, addr, win32addr):
+		# FIXME: what are we doing here?
 		vad_nodes = []
 		for vad in vadroot.traverse():
 			self.add_vadentry(addr, vad.v(), vad_nodes)
@@ -215,7 +248,11 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  Win32 Start Address: 0x{0:08X}\n".format(win32addr))
 			self.disasm(outfd, addr, 0x20, highlight=addr)
 
-	def dump_stack_frame(self, outfd, address, length=0x80, width=16, title="Frame Dump", highlight=None):
+	def dump_stack_frame(self, outfd, address, length=0x80, width=16, title="Frame Dump", highlight=None, stack_type="user"):
+		if stack_type == "kernel":
+			address_space = self.kernel_address_space
+		else:
+			address_space = self.process_address_space
 		outfd.write("  {0}:\n".format(title))
 		if length % 4 != 0:
 			length = (length+4) - (length%4)
@@ -223,8 +260,8 @@ class ExportStack(filescan.FileScan):
 		FILTER=''.join([(len(repr(chr(x)))==3) and chr(x) or '.' for x in range(256)])
 		N=0
 		while N < length:
-			data = ' '.join([ "{0:02X}".format(ord(x)) if x else '??' for x in [ self.process_address_space.read(address+N+i, 1) for i in range(0, width) ] ])
-			hexa = ''.join([ x.translate(FILTER) if x else '.' for x in [ self.process_address_space.read(address+N+i, 1) for i in range(0, width) ] ])
+			data = ' '.join([ "{0:02X}".format(ord(x)) if x else '??' for x in [ address_space.read(address+N+i, 1) if address_space.is_valid_address(address+N+i) else None for i in range(0, width) ] ])
+			hexa = ''.join([ x.translate(FILTER) if x else '.' for x in [ address_space.read(address+N+i, 1) if address_space.is_valid_address(address+N+i) else None for i in range(0, width) ] ])
 			if highlight == address+N:
 				outfd.write("{0} => 0x{1:08X}{2} {3:{width}} {4}\n".format(self.highlight_colour_cursor, address+N, "".join(self.colour_stack), data, hexa, width=width*3))
 			else:
@@ -239,9 +276,9 @@ class ExportStack(filescan.FileScan):
 		try:
 			return ["Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting", "Transition", "DeferredReady", "GateWait"][state]
 		except:
-			return "{0} is an unknown thread state!".format(state)
+			return "0x{0:08X} is an unknown thread state!".format(state)
 
-	def unwind_stack(self, outfd, stack_frames):
+	def unwind_stack(self, outfd, stack_frames, stack_type="user"):
 		if stack_frames == []:
 			return
 		for frame in stack_frames:
@@ -251,7 +288,7 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  EIP: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, frame['eip'], "".join(self.colour_stack)))
 			outfd.write("  EBP: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, frame['ebp'], "".join(self.colour_stack)))
 			if frame['ebp'] >= 0x80:
-				self.dump_stack_frame(outfd, frame['ebp']-0x40, 0x8d, highlight=frame['ebp'])
+				self.dump_stack_frame(outfd, frame['ebp']-0x40, 0x8d, highlight=frame['ebp'], stack_type=stack_type)
 			if frame['eip'] > 0x20:
 				outfd.write("  Calling Code Dissassembly:\n")
 				self.disasm(outfd, frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
@@ -264,21 +301,43 @@ class ExportStack(filescan.FileScan):
 	def dump_trap_frame(self, outfd, trap_frame, title="User"):
 		outfd.write("\n")
 		outfd.write("  {0} Mode Registers:\n".format(title))
-		for reg in ['Eip', 'Esp', 'Ebp', 'Eax']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		for reg, data_reg in [('Eip', 'Eip'), ('Esp', 'HardwareEsp'), ('Ebp', 'Ebp'), ('Err', 'ErrCode')]:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
 		outfd.write("\n")
-		for reg in ['Ebx', 'Ecx', 'Edx', 'Edi']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		for reg in ['Eax', 'Ebx', 'Ecx', 'Edx']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
 		outfd.write("\n")
-		for reg in ['Esi']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format('HardwareEsp' if reg == 'Esp' else reg))))
+		for reg in ['Esi', 'Edi']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
+		outfd.write("\n")
+		for reg, data_reg in [('CS', 'SegCs'), ('SS', 'HardwareSegSs'), ('DS', 'SegDs'), ('ES', 'SegEs')]:
+			outfd.write("    {0}:  0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
+		outfd.write("\n")
+		for reg, data_reg in [('GS: ', 'SegGs'), ('EFlags:', 'EFlags')]:
+			outfd.write("    {0} 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
+		outfd.write("\n")
+		for reg in ['Dr0', 'Dr1', 'Dr2', 'Dr3']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
+		outfd.write("\n")
+		for reg in ['Dr6', 'Dr7']:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
 		outfd.write("\n")
 		return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
+		
+	# Copied from the Threads class in malware.py
+	def get_image_name(self, proc_offset):
+		"""Safely read a process's name, assuming it could be invalid"""
+		data = self.kernel_address_space.zread(proc_offset + self.kernel_address_space.profile.get_obj_offset("_EPROCESS", "ImageFileName"), 16)
+		if data:
+			if data.find("\x00") != -1:
+				data = data[:data.find("\x00")]
+			return repr(data)
+		return ""
 
 	def carve_thread(self, outfd, eproc, ethread):
 		outfd.write("*"*20)
 		outfd.write("\n")
-		outfd.write("Process ID: {0} [_EPROCESS @ 0x{1:08X}]\n".format(ethread.Cid.UniqueProcess, eproc.v()))
+		outfd.write("Process ID: {0} [_EPROCESS @ 0x{1:08X}; {2}]\n".format(ethread.Cid.UniqueProcess, eproc.v(), self.get_image_name(eproc.v())))
 		if eproc.v() != ethread.Tcb.ApcState.Process.v():
 			outfd.write("  Attached to _EPROCESS: 0x{0:08X}\n".format(ethread.Tcb.ApcState.Process))
 		outfd.write("Thread ID: {0} [_ETHREAD @ 0x{1:08X}]\n".format(ethread.Cid.UniqueThread, ethread.v()))
@@ -288,7 +347,6 @@ class ExportStack(filescan.FileScan):
 		outfd.write("  User Time: {0}\n".format(ethread.Tcb.UserTime))
 		outfd.write("  State: {0}\n".format(self.get_kthread_state(ethread.Tcb.State)))
 		outfd.write("  TEB: 0x{0:08X}\n".format(ethread.Tcb.Teb))
-		# FIXME: 
 		if self.read_bitmap(ethread.CrossThreadFlags, 0):
 			outfd.write("  Terminated thread\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 1):
@@ -301,27 +359,35 @@ class ExportStack(filescan.FileScan):
 		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
-		esp = trap_frame.HardwareEsp.v() if True else ethread.Tcb.KernelStack.v()
+		# FIXME: is this correct?
+		esp = trap_frame.HardwareEsp.v() if trap_frame.is_valid() else ethread.Tcb.KernelStack.v()
 		if esp >= 0x80000000:
-			outfd.write("  Current Stack [Kernel]\n")
+			outfd.write("\n  Currently Using the Kernel Stack\n\n")
 		else:
-			outfd.write("  Current Stack [User]\n")
-		stack_base = ethread.Tcb.InitialStack.v()
-		stack_limit = ethread.Tcb.StackLimit.v()
-		outfd.write("    Base: 0x{0:08X}\n".format(stack_base))
-		outfd.write("    Limit: 0x{0:08X}\n".format(stack_limit))
-		outfd.write("    Current Esp: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, esp, "".join(self.colour_stack)))
-		self.dump_stack_frame(outfd, esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp)
+			outfd.write("\n  Currently Using the User Stack\n\n")
+		# FIXME: what do the following do?
+		kstack_base = ethread.Tcb.InitialStack.v()
+		kstack_limit = ethread.Tcb.StackLimit.v()
+		outfd.write("  Kernel Stack\n")
+		outfd.write("    Base: 0x{0:08X}\n".format(kstack_base))
+		outfd.write("    Limit: 0x{0:08X}\n".format(kstack_limit))
+		if self.kernel_address_space.is_valid_address(ethread.Tcb.KernelStack.v()):
+			outfd.write("Kernel Stack Unwind ==>\n")
+			self.unwind_stack(outfd, self.get_stack_frames(ethread.Tcb.KernelStack.v(), kstack_base, kstack_limit), stack_type="kernel")
+			outfd.write("<== End Kernel Stack Unwind\n")
+			outfd.write("\n")
+		#outfd.write("\n  Current Esp: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, esp, "".join(self.colour_stack)))
+		#self.dump_stack_frame(outfd, esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp, stack_type="")
 		teb = obj.Object('_TEB', offset = ethread.Tcb.Teb.v(), vm = self.process_address_space)
 		if teb.is_valid():
-			stack_base = teb.NtTib.StackBase.v()
-			stack_limit = teb.NtTib.StackLimit.v()
+			ustack_base = teb.NtTib.StackBase.v()
+			ustack_limit = teb.NtTib.StackLimit.v()
 			outfd.write("  User Stack\n")
-			outfd.write("    Base: 0x{0:08X}\n".format(stack_base))
-			outfd.write("    Limit: 0x{0:08X}\n".format(stack_limit))
+			outfd.write("    Base: 0x{0:08X}\n".format(ustack_base))
+			outfd.write("    Limit: 0x{0:08X}\n".format(ustack_limit))
 			if trap_frame.is_valid():
 				outfd.write("User Stack Unwind ==>\n")
-				self.unwind_stack(outfd, self.get_stack_frames(top_frame['ebp'], stack_base, stack_limit, top_frame['eip']))
+				self.unwind_stack(outfd, self.get_stack_frames(top_frame['ebp'], ustack_base, ustack_limit, top_frame['eip']), stack_type="user")
 				outfd.write("<== End User Stack Unwind\n")
 				outfd.write("\n")
 			else:
@@ -341,4 +407,5 @@ class ExportStack(filescan.FileScan):
 		outfd.write("***************\n")
 		outfd.write("* GUI Threads *\n")
 		outfd.write("***************\n")
-		[ self.carve_thread(outfd, eproc, ethread.Tcb.Win32Thread.dereference_as("_ETHREAD")) for ethread in eproc.ThreadListHead.list_of_type('_ETHREAD', 'ThreadListEntry') if ethread.Tcb.Win32Thread.is_valid() and ethread.Tcb.Win32Thread.v() >= 0x80000000 ]
+		# Windows GUI threads are only visible within the processes address space (the System process, most likely, has no access!)
+		[ self.carve_thread(outfd, eproc, ethread.Tcb.Win32Thread.dereference_as("_W32THREAD").pEThread) for ethread in eproc.ThreadListHead.list_of_type('_ETHREAD', 'ThreadListEntry') if ethread.Tcb.Win32Thread.is_valid() and ethread.Tcb.Win32Thread.v() >= 0x80000000 ]
