@@ -135,26 +135,27 @@ class ExportStack(filescan.FileScan):
 
 	def get_stack_frames(self, start_ebp, stack_base, stack_limit, start_eip=None):
 		def stack_frame_iterator_up():
+			# Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
 			ebp = start_ebp
 			ebp_ptr = start_ebp - 4
-			# FIXME: shouldn't we have something like stack_base +/- stack_limit here?
 			while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
+				# FIXME: check the alignment of stack frames (might be able to decrement with larger values?)
 				if not self.process_address_space.is_valid_address(ebp_ptr):
 					ebp_ptr -= 1
 				else:
 					ebp_value = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr))
 					if ebp_value == ebp:
 						ebp = ebp_ptr
-						eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr-4))
+						eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr+4))
 						yield { 'eip':eip, 'ebp':ebp }
 						ebp_ptr -= 4
 					else:
 						ebp_ptr -= 1
 		def stack_frame_iterator_down():
+			# Follow the EBP chain downloads and so locate stack frames
 			if start_eip != None:
 				yield { 'eip':start_eip, 'ebp':start_ebp }
 			ebp = start_ebp
-			# FIXME: shouldn't we have something like stack_base +/- stack_limit here?
 			while stack_base >= ebp and ebp > stack_limit:
 				if not self.process_address_space.is_valid_address(ebp):
 					return
@@ -300,11 +301,21 @@ class ExportStack(filescan.FileScan):
 			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
 		outfd.write("\n")
 		return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
+		
+	# Copied from the Threads class in malware.py
+	def get_image_name(self, proc_offset):
+		"""Safely read a process's name, assuming it could be invalid"""
+		data = self.kernel_address_space.zread(proc_offset + self.kernel_address_space.profile.get_obj_offset("_EPROCESS", "ImageFileName"), 16)
+		if data:
+			if data.find("\x00") != -1:
+				data = data[:data.find("\x00")]
+			return repr(data)
+		return ""
 
 	def carve_thread(self, outfd, eproc, ethread):
 		outfd.write("*"*20)
 		outfd.write("\n")
-		outfd.write("Process ID: {0} [_EPROCESS @ 0x{1:08X}]\n".format(ethread.Cid.UniqueProcess, eproc.v()))
+		outfd.write("Process ID: {0} [_EPROCESS @ 0x{1:08X}; {2}]\n".format(ethread.Cid.UniqueProcess, eproc.v(), self.get_image_name(eproc.v())))
 		if eproc.v() != ethread.Tcb.ApcState.Process.v():
 			outfd.write("  Attached to _EPROCESS: 0x{0:08X}\n".format(ethread.Tcb.ApcState.Process))
 		outfd.write("Thread ID: {0} [_ETHREAD @ 0x{1:08X}]\n".format(ethread.Cid.UniqueThread, ethread.v()))
@@ -326,17 +337,19 @@ class ExportStack(filescan.FileScan):
 		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
-		esp = trap_frame.HardwareEsp.v() if trap_frame.is_valid() else ethread.Tcb.KernelStack.v() # FIXME: is this correct?
+		# FIXME: is this correct?
+		esp = trap_frame.HardwareEsp.v() if trap_frame.is_valid() else ethread.Tcb.KernelStack.v()
 		if esp >= 0x80000000:
-			outfd.write("  Current Stack [Kernel]\n")
+			outfd.write("\n  Current Stack [Kernel]\n")
 		else:
-			outfd.write("  Current Stack [User]\n")
+			outfd.write("\n  Current Stack [User]\n")
 		# FIXME: what do the following do?
 		stack_base = ethread.Tcb.InitialStack.v()
 		stack_limit = ethread.Tcb.StackLimit.v()
+		outfd.write("  Kernel Stack\n")
 		outfd.write("    Base: 0x{0:08X}\n".format(stack_base))
 		outfd.write("    Limit: 0x{0:08X}\n".format(stack_limit))
-		outfd.write("    Current Esp: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, esp, "".join(self.colour_stack)))
+		outfd.write("\n  Current Esp: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, esp, "".join(self.colour_stack)))
 		self.dump_stack_frame(outfd, esp-0x40, 0x8d, title="Current Esp Dump", highlight=esp)
 		teb = obj.Object('_TEB', offset = ethread.Tcb.Teb.v(), vm = self.process_address_space)
 		if teb.is_valid():
