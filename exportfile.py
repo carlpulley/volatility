@@ -29,6 +29,7 @@ This plugin implements the exporting and saving of _FILE_OBJECT's
 
 import re
 import commands as exe
+import os
 import os.path
 import math
 import struct
@@ -130,6 +131,8 @@ class ExportFile(filescan.FileScan):
 	    https://media.blackhat.com/bh-us-11/Butler/BH_US_11_ButlerMurdock_Physical_Memory_Forensics-WP.pdf
 	[6] CodeMachine article on Prototype PTEs (accessed 8/Oct/2011):
 	    http://www.codemachine.com/article_protopte.html
+	[7] OSR Online article: Cache Me If You Can: Using the NT Chace Manager (accessed 14/Oct/2011):
+	    http://www.osronline.com/article.cfm?id=167
 	"""
 
 	meta_info = dict(
@@ -221,18 +224,14 @@ class ExportFile(filescan.FileScan):
 		if bool(self._config.reconstruct):
 			# Perform no file extraction, simply reconstruct existing extracted file pages
 			for file_object, file_name in data:
-				file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
-				if len(file_name_path) > 0 and file_name_path[0] == "\'":
-					file_name_path = file_name_path[1:]
-				if len(file_name_path) > 0 and file_name_path[-1] == "\'":
-					file_name_path = file_name_path[0:-1]
+				file_name_path = re.sub(r'\'', '', re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name)))
 				self.reconstruct_file(outfd, file_object, file_name_path)
 		else:
 			# Process extracted file page data and then perform file reconstruction upon the results
 			for file_data in data:
 				for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
 					# FIXME: fix this hacky way of creating directory structures
-					file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
+					file_name_path = re.sub(r'\'', '', re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name)))
 					if not(os.path.exists(file_name_path)):
 						exe.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
 					outfd.write("#"*20)
@@ -393,11 +392,27 @@ class ExportFile(filescan.FileScan):
 				self.dump_data(outfd, page, page_path, start_addr, end_addr)
 
 	def reconstruct_file(self, outfd, file_object, file_name_path):
-		# TODO: 
 		outfd.write("[_FILE_OBJECT @ 0x{0:08X}] Reconstructing extracted memory pages from:\n  {1}\n".format(file_object.v(), file_name_path))
 		fill_page = chr(self._config.fill % 256)*(4*self.KB)
-		# list files in file_name_path
-		# map file list to (file, start, end) tuples
-		# check and remove duplicate pages
-		# glue remaining file pages together
-		pass
+		if os.path.exists(file_name_path):
+			# list files in file_name_path
+			raw_page_dumps = [ f for f in os.listdir(file_name_path) if re.search("(direct|cache)\.0x[a-fA-F0-9]{8}\-0x[a-fA-F0-9]{8}\.dmp(\.[a-fA-F0-9]{32})?$", f) ]
+			print raw_page_dumps
+			# map file list to (dump_type, start_addr, end_addr, data, md5) tuple list
+			page_dumps = []
+			for dump in raw_page_dumps:
+				dump_type, addr_range, ignore, md5 = dump.split(".")
+				start_addr, end_addr = map(lambda x: x[2:], addr_range.split("-"))
+				data = ""
+				with open("{0}/{1}".format(file_name_path, dump), 'r') as fobj:
+					data = fobj.read()
+				if hashlib.md5(data).hexdigest() != md5:
+					debug.error("consistency check failed (MD5 checksum check for {0} failed!)".format(dump))
+				page_dumps += [ (dump_type, start_addr, end_addr, data, md5) ]
+			# check and remove duplicate pages
+			print [ (dump_type, start_addr, end_addr, md5) for dump_type, start_addr, end_addr, data, md5 in page_dumps]
+			# reconcile page overlaps and barf if conflicts can not be solved
+			# glue remaining file pages together
+			pass
+		else:
+			outfd.write("..Skipping file reconstruction due to a lack of extracted pages\n")
