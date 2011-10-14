@@ -37,10 +37,10 @@ PLUGIN SIMILARITIES
 
 The exportstack.py plugin has a number of similarities to:
   http://code.google.com/p/volatility/wiki/CommandReference#threads
-exportstack.py differs mainly in the fact that it attempts to perform a stack 
-unwind, whilst threads does not currently do this. In addition, threads currently 
-displays a number of useful _ETHREAD members that exportstack.py does not and 
-incorporates an excellent tag based filtering system.
+exportstack.py differs mainly in the fact that it attempts to perform (user and 
+kernel) stack unwinds, whilst threads does not currently do this. In addition, 
+threads currently displays a number of useful _ETHREAD members that 
+exportstack.py does not and incorporates an excellent tag based filtering system.
 
 PLUGIN DEPENDENCIES
 ===================
@@ -53,10 +53,6 @@ CURRENT LIMITATIONS
 As the exportfile plugin is currently being worked upon, file reconstruction 
 (i.e. "this") has been removed. This code is currently being reworked and will 
 be added back in again very soon.
-
-exportstack has not yet been fully ported across (so exporting of Win32 GUI 
-threads is currently non-functional). Displayed data is also not tested to the 
-extent it should be!
 
 There is an unpatched bug in the Volatility 2.0 filescan plugin. This bug 
 causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding 
