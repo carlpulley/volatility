@@ -19,7 +19,7 @@
 #
 
 """
-This plugin implements the exporting and saving of _FILE_OBJECT's
+This plugin displays information regarding an _EPROCESS'es thread data structures
 
 @author:       Carl Pulley
 @license:      GNU General Public License 2.0 or later
@@ -228,26 +228,6 @@ class ExportStack(filescan.FileScan):
 					outfd.write("    0x{0:08X}: unreadable\n".format(addr+offset))
 				offset += 4
 
-	def print_vadinfo(self, outfd, vadroot, addr, win32addr):
-		# FIXME: what are we doing here?
-		vad_nodes = []
-		for vad in vadroot.traverse():
-			self.add_vadentry(addr, vad.v(), vad_nodes)
-		win32_vad_nodes = []
-		for vad in vadroot.traverse():
-			self.add_vadentry(win32addr, vad.v(), win32_vad_nodes)
-		if win32addr != 0 and win32addr != None and win32_vad_nodes == [] and vad_nodes == []:
-			outfd.write("  Start Address: 0x{0:08X}\n".format(addr))
-			outfd.write("  Win32 Start Address: 0x{0:08X}\n".format(win32addr))
-		elif win32_vad_nodes != []:
-			outfd.write("  Start Address: 0x{0:08X}\n".format(addr))
-			outfd.write("  Win32 Start Address[*]: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, win32addr, "".join(self.colour_stack)))
-			self.disasm(outfd, win32addr, 0x20, highlight=win32addr)
-		else:
-			outfd.write("  Start Address[*]: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, addr, "".join(self.colour_stack)))
-			outfd.write("  Win32 Start Address: 0x{0:08X}\n".format(win32addr))
-			self.disasm(outfd, addr, 0x20, highlight=addr)
-
 	def dump_stack_frame(self, outfd, address, length=0x80, width=16, title="Frame Dump", highlight=None, stack_type="user"):
 		if stack_type == "kernel":
 			address_space = self.kernel_address_space
@@ -355,7 +335,6 @@ class ExportStack(filescan.FileScan):
 			outfd.write("  Hide thread from debugger\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 4):
 			outfd.write("  System thread\n")
-		#self.print_vadinfo(outfd, eproc.VadRoot, ethread.StartAddress.v(), ethread.Win32StartAddress.v())
 		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
 		if trap_frame.is_valid():
 			top_frame = self.dump_trap_frame(outfd, trap_frame)
