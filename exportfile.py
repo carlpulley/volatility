@@ -29,6 +29,7 @@ This plugin implements the exporting and saving of _FILE_OBJECT's
 
 import re
 import commands as exe
+import os
 import os.path
 import math
 import struct
@@ -76,7 +77,7 @@ class ExportFile(filescan.FileScan):
 	some of the forensic benefits of accessing files via the _FILE_OBJECT data 
 	structure.
 	
-	EXAMPLE 1: Exporting a single FILE_OBJECT
+	EXAMPLE:
 	
 	_FILE_OBJECT at 0x81CE4868 is a file named:
 	  \\\\Program Files\\\\Mozilla Firefox\\\\chrome\\\\en-US.jar
@@ -105,15 +106,6 @@ class ExportFile(filescan.FileScan):
 	             + cache.0x51000-0x52FFF.dmp.MD5
 	and fillPages(0xFF) is a collection of pages filled with the byte 0xFF.
 	
-	EXAMPLE 2: Manual File Reconstruction (--reconstruct)
-	
-	Things here are broadly similar to EXAMPLE 1 (i.e. "glue" pages together 
-	with fill pages for padding). However, when two distinct _FILE_OBJECT's 
-	have a set of page addresses in common, but the respective contents of 
-	those pages are different, we need to resolve this conflict somehow.
-	
-	TODO: say something further about how we resolve page clashes
-	
 	REFERENCES:
 	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
 	    Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro 
@@ -130,6 +122,8 @@ class ExportFile(filescan.FileScan):
 	    https://media.blackhat.com/bh-us-11/Butler/BH_US_11_ButlerMurdock_Physical_Memory_Forensics-WP.pdf
 	[6] CodeMachine article on Prototype PTEs (accessed 8/Oct/2011):
 	    http://www.codemachine.com/article_protopte.html
+	[7] OSR Online article: Cache Me If You Can: Using the NT Chace Manager (accessed 14/Oct/2011):
+	    http://www.osronline.com/article.cfm?id=167
 	"""
 
 	meta_info = dict(
@@ -221,18 +215,14 @@ class ExportFile(filescan.FileScan):
 		if bool(self._config.reconstruct):
 			# Perform no file extraction, simply reconstruct existing extracted file pages
 			for file_object, file_name in data:
-				file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
-				if len(file_name_path) > 0 and file_name_path[0] == "\'":
-					file_name_path = file_name_path[1:]
-				if len(file_name_path) > 0 and file_name_path[-1] == "\'":
-					file_name_path = file_name_path[0:-1]
+				file_name_path = re.sub(r'\'', '', re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name)))
 				self.reconstruct_file(outfd, file_object, file_name_path)
 		else:
 			# Process extracted file page data and then perform file reconstruction upon the results
 			for file_data in data:
 				for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
 					# FIXME: fix this hacky way of creating directory structures
-					file_name_path = re.sub(r'[\\:]', '/', base_dir + "/" + file_name)
+					file_name_path = re.sub(r'\'', '', re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name)))
 					if not(os.path.exists(file_name_path)):
 						exe.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
 					outfd.write("#"*20)
@@ -393,11 +383,48 @@ class ExportFile(filescan.FileScan):
 				self.dump_data(outfd, page, page_path, start_addr, end_addr)
 
 	def reconstruct_file(self, outfd, file_object, file_name_path):
-		# TODO: 
+		def check_for_overlaps(data):
+			# ASSUME: data is sorted by (start_addr, end_addr, md5)
+			while len(data) >= 2:
+				end_addr1 = data[0][2]
+				start_addr2 = data[1][1]
+				if start_addr2 <= end_addr1:
+					raise ExportException("File Reconstruction Failed: overlapping page conflict (for address range 0x{0:08X}-0x{1:08X}) detected during file reconstruction - please manually fix and use --reconstruct to attempt rebuilding the file".format(start_addr2, end_addr1))
+				data = data[1:]
+		
 		outfd.write("[_FILE_OBJECT @ 0x{0:08X}] Reconstructing extracted memory pages from:\n  {1}\n".format(file_object.v(), file_name_path))
-		fill_page = chr(self._config.fill % 256)*(4*self.KB)
-		# list files in file_name_path
-		# map file list to (file, start, end) tuples
-		# check and remove duplicate pages
-		# glue remaining file pages together
-		pass
+		fill_char = chr(self._config.fill % 256)
+		if os.path.exists(file_name_path):
+			# list files in file_name_path
+			# FIXME: add "direct" back in here once we've solved the sector addressing issue
+			raw_page_dumps = [ f for f in os.listdir(file_name_path) if re.search("(cache)\.0x[a-fA-F0-9]{8}\-0x[a-fA-F0-9]{8}\.dmp(\.[a-fA-F0-9]{32})?$", f) ]
+			# map file list to (dump_type, start_addr, end_addr, data, md5) tuple list
+			page_dumps = []
+			for dump in raw_page_dumps:
+				dump_type, addr_range, ignore, md5 = dump.split(".")
+				start_addr, end_addr = map(lambda x: x[2:], addr_range.split("-"))
+				data = ""
+				with open("{0}/{1}".format(file_name_path, dump), 'r') as fobj:
+					data = fobj.read()
+				if hashlib.md5(data).hexdigest() != md5:
+					debug.error("consistency check failed (MD5 checksum check for {0} failed!)".format(dump))
+				page_dumps += [ (dump_type, int(start_addr, 16), int(end_addr, 16), data, md5) ]
+			try:
+				# check for page overlaps
+				extracted_file_data = sorted(page_dumps, key = lambda x: (x[1], x[2], x[3]))
+				check_for_overlaps(extracted_file_data)
+				# glue remaining file pages together and save reconstructed file as "this"
+				with open("{0}/this".format(file_name_path), 'wb') as fobj:
+					offset = 0
+					for data_type, start_addr, end_addr, data, data_hash in extracted_file_data:
+						if offset > end_addr:
+							break
+						if offset < start_addr:
+							fobj.write(fill_char*(start_addr - offset))
+						fobj.write(data)
+						offset = end_addr + 1
+				outfd.write("Successfully Reconstructed File\n")
+			except ExportException as exn:
+				debug.warning(exn)
+		else:
+			outfd.write("..Skipping file reconstruction due to a lack of extracted pages\n")
