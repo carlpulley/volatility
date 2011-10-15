@@ -50,9 +50,9 @@ exportstack.py uses the pydasm library (see http://code.google.com/p/libdasm/).
 CURRENT LIMITATIONS
 ===================
 
-As the exportfile plugin is currently being worked upon, file reconstruction 
-(i.e. "this") has been removed. This code is currently being reworked and will 
-be added back in again very soon.
+Due to a bug in the exportfile plugin's memory mapped page extraction code, 
+extracted pages are not addressed correctly. Until this issue is resolved, file 
+reconstruction only works for shared cache file pages.
 
 There is an unpatched bug in the Volatility 2.0 filescan plugin. This bug 
 causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding 
