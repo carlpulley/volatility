@@ -387,6 +387,7 @@ class ExportFile(filescan.FileScan):
 				page_path = "{0}/direct.0x{1:08X}-0x{2:08X}.dmp.{3}".format(file_name_path, start_addr, end_addr, page_hash)
 				self.dump_data(outfd, page, page_path, start_addr, end_addr)
 
+	# FIXME: check overlapping regions and check for commonalities!
 	def reconstruct_file(self, outfd, file_object, file_name_path):
 		def check_for_overlaps(data):
 			# ASSUME: data is sorted by (start_addr, end_addr, md5)
