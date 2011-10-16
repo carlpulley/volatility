@@ -387,19 +387,28 @@ class ExportFile(filescan.FileScan):
 				page_path = "{0}/direct.0x{1:08X}-0x{2:08X}.dmp.{3}".format(file_name_path, start_addr, end_addr, page_hash)
 				self.dump_data(outfd, page, page_path, start_addr, end_addr)
 
-	# FIXME: check overlapping regions and check for commonalities!
 	def reconstruct_file(self, outfd, file_object, file_name_path):
 		def check_for_overlaps(data):
 			# ASSUME: data is sorted by (start_addr, end_addr, md5)
 			while len(data) >= 2:
-				end_addr1 = data[0][2]
-				start_addr2 = data[1][1]
+				data_type1, start_addr1, end_addr1, data1, hash1 = data[0]
+				data_type2, start_addr2, end_addr2, data2, hash2 = data[1]
 				if start_addr2 <= end_addr1:
-					if os.path.exists("{0}/this".format(file_name_path)):
-						# We're about to fail with reconstruction, eliminate any old "this" files from previous reconstruction attempts
-						os.remove("{0}/this".format(file_name_path))
-					raise ExportException("File Reconstruction Failed: overlapping page conflict (for address range 0x{0:08X}-0x{1:08X}) detected during file reconstruction - please manually fix and use --reconstruct to attempt rebuilding the file".format(start_addr2, end_addr1))
+					# Check if the overlap provides a data conflict
+					if start_addr1 == start_addr2 and end_addr1 == end_addr2 and hash1 == hash2:
+						# data overlap provides no conflict
+						pass
+					else:
+						# data conflict exists
+						if os.path.exists("{0}/this".format(file_name_path)):
+							# We're about to fail with reconstruction, eliminate any old "this" files from previous reconstruction attempts
+							os.remove("{0}/this".format(file_name_path))
+						raise ExportException("File Reconstruction Failed: overlapping page conflict (for address range 0x{0:08X}-0x{1:08X}) detected during file reconstruction - please manually fix and use --reconstruct to attempt rebuilding the file".format(start_addr2, end_addr1))
+				else:
+					yield data[0]
 				data = data[1:]
+			if len(data) > 0:
+				yield data[0]
 		
 		outfd.write("[_FILE_OBJECT @ 0x{0:08X}] Reconstructing extracted memory pages from:\n  {1}\n".format(file_object.v(), file_name_path))
 		fill_char = chr(self._config.fill % 256)
@@ -419,8 +428,7 @@ class ExportFile(filescan.FileScan):
 				page_dumps += [ (dump_type, int(start_addr, 16), int(end_addr, 16), data, md5) ]
 			try:
 				# check for page overlaps
-				extracted_file_data = sorted(page_dumps, key = lambda x: (x[1], x[2], x[3]))
-				check_for_overlaps(extracted_file_data)
+				extracted_file_data = check_for_overlaps(sorted(page_dumps, key = lambda x: (x[1], x[2], x[3])))
 				# glue remaining file pages together and save reconstructed file as "this"
 				with open("{0}/this".format(file_name_path), 'wb') as fobj:
 					offset = 0
