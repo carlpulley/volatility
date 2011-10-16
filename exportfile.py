@@ -352,10 +352,15 @@ class ExportFile(filescan.FileScan):
 		result = []
 		start_subsection = obj.Object("_SUBSECTION", offset = control_area.v() + control_area.size(), vm = self.kernel_address_space)
 		subsection_list = self.walk_subsections(start_subsection)
+		sector = None
 		for subsection, index in zip(subsection_list, range(0, len(subsection_list))):
 			start_sector = subsection.StartingSector
 			num_of_sectors = subsection.NumberOfFullSectors
-			result += [ (page, start_sector + pte_index*num_of_sectors, start_sector + (pte_index + 1)*num_of_sectors) for page, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
+			if sector == None:
+				sector = start_sector
+			sector_data = [ (page, pte_index) for page, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
+			result += map(lambda ((page, pte_index), position): (page, sector + position*8), zip(sector_data, range(0, len(sector_data))))
+			sector += len(sector_data)*8
 		return result
 
 	def dump_data(self, outfd, data, dump_file, start_addr, end_addr):
@@ -374,7 +379,7 @@ class ExportFile(filescan.FileScan):
 
 	def dump_control_pages(self, outfd, data, file_object, file_name_path, extracted_file_data):
 		sorted_extracted_fobjs = sorted(extracted_file_data, key = lambda tup: tup[1])
-		for page, start_sector, end_sector in sorted_extracted_fobjs:
+		for page, start_sector in sorted_extracted_fobjs:
 			if page != None:
 				start_addr = start_sector*512
 				end_addr = (start_sector + 8)*512 - 1
@@ -389,6 +394,9 @@ class ExportFile(filescan.FileScan):
 				end_addr1 = data[0][2]
 				start_addr2 = data[1][1]
 				if start_addr2 <= end_addr1:
+					if os.path.exists("{0}/this".format(file_name_path)):
+						# We're about to fail with reconstruction, eliminate any old "this" files from previous reconstruction attempts
+						os.remove("{0}/this".format(file_name_path))
 					raise ExportException("File Reconstruction Failed: overlapping page conflict (for address range 0x{0:08X}-0x{1:08X}) detected during file reconstruction - please manually fix and use --reconstruct to attempt rebuilding the file".format(start_addr2, end_addr1))
 				data = data[1:]
 		
@@ -396,8 +404,7 @@ class ExportFile(filescan.FileScan):
 		fill_char = chr(self._config.fill % 256)
 		if os.path.exists(file_name_path):
 			# list files in file_name_path
-			# FIXME: add "direct" back in here once we've solved the sector addressing issue
-			raw_page_dumps = [ f for f in os.listdir(file_name_path) if re.search("(cache)\.0x[a-fA-F0-9]{8}\-0x[a-fA-F0-9]{8}\.dmp(\.[a-fA-F0-9]{32})?$", f) ]
+			raw_page_dumps = [ f for f in os.listdir(file_name_path) if re.search("(cache|direct)\.0x[a-fA-F0-9]{8}\-0x[a-fA-F0-9]{8}\.dmp(\.[a-fA-F0-9]{32})?$", f) ]
 			# map file list to (dump_type, start_addr, end_addr, data, md5) tuple list
 			page_dumps = []
 			for dump in raw_page_dumps:
