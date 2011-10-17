@@ -45,7 +45,7 @@ exportstack.py does not and incorporates an excellent tag based filtering system
 PLUGIN DEPENDENCIES
 ===================
 
-exportstack.py uses the pydasm library (see http://code.google.com/p/libdasm/).
+exportstack.py uses the distorm3 library (see http://code.google.com/p/distorm/).
 
 CURRENT LIMITATIONS
 ===================
