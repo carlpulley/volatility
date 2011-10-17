@@ -30,9 +30,9 @@ This plugin displays information regarding an _EPROCESS'es thread data structure
 import re
 import os.path
 try:
-	import pydasm
+	import distorm3
 except ImportError:
-	print "pydasm is not installed, see http://code.google.com/p/libdasm/ for further information"
+	print "distorm3 is not installed, see http://code.google.com/p/distorm/ for further information"
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
@@ -208,8 +208,13 @@ class ExportStack(filescan.FileScan):
 		offset = 0
 		while offset < size:
 			if self.process_address_space.is_valid_address(addr+offset):
-				i = pydasm.get_instruction(buf[offset:], pydasm.MODE_32)
-				if not i: 
+				instr = ""
+				instr_iter = distorm3.DecodeGenerator(addr+offset, buf[offset:], distorm3.Decode32Bits)
+				for i_off, i_sz, i_str, i_hex in instr_iter:
+					instr = i_str
+					instr_len = i_sz
+					break
+				if instr == "":
 					if addr+offset == highlight:
 						outfd.write("{0} => 0x{1:08X}{2}: ??\n".format(highlight_color_cursor, addr+offset, "".join(self.colour_stack)))
 					else:
@@ -217,10 +222,10 @@ class ExportStack(filescan.FileScan):
 					offset += 1 
 				else:
 					if addr+offset == highlight:
-						outfd.write("{0} => 0x{1:08X}{2}: {3}\n".format(self.highlight_colour_cursor, addr+offset, "".join(self.colour_stack), pydasm.get_instruction_string(i, pydasm.FORMAT_INTEL, 0)))
+						outfd.write("{0} => 0x{1:08X}{2}: {3}\n".format(self.highlight_colour_cursor, addr+offset, "".join(self.colour_stack), instr))
 					else:
-						outfd.write("    0x{0:08X}: {1}\n".format(addr+offset, pydasm.get_instruction_string(i, pydasm.FORMAT_INTEL, 0)))
-					offset += i.length
+						outfd.write("    0x{0:08X}: {1}\n".format(addr+offset, instr))
+					offset += instr_len
 			else:
 				if addr+offset == highlight:
 					outfd.write("{0} => 0x{1:08X}{2}: unreadable\n".format(self.highlight_colour_cursor, addr+offset, "".join(self.colour_stack)))
