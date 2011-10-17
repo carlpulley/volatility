@@ -215,14 +215,14 @@ class ExportFile(filescan.FileScan):
 		if bool(self._config.reconstruct):
 			# Perform no file extraction, simply reconstruct existing extracted file pages
 			for file_object, file_name in data:
-				file_name_path = re.sub(r'\'', '', re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name)))
+				file_name_path = re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name))
 				self.reconstruct_file(outfd, file_object, file_name_path)
 		else:
 			# Process extracted file page data and then perform file reconstruction upon the results
 			for file_data in data:
 				for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
 					# FIXME: fix this hacky way of creating directory structures
-					file_name_path = re.sub(r'\'', '', re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name)))
+					file_name_path = re.sub(r'//', '/', re.sub(r'[\\:]', '/', base_dir + "/" + file_name))
 					if not(os.path.exists(file_name_path)):
 						exe.getoutput("mkdir -p {0}".format(re.escape(file_name_path)))
 					outfd.write("#"*20)
@@ -256,7 +256,7 @@ class ExportFile(filescan.FileScan):
 		string = self.kernel_address_space.read(string_offset, string_length)
 		if not string:
 			return ''
-		return repr(string[:260].decode("utf16", "ignore").encode("utf8", "xmlcharrefreplace"))
+		return string[:260].decode("utf16", "ignore").encode("utf8", "xmlcharrefreplace")
 
 	def read_large_integer(self, large_integer):
 		return large_integer.HighPart.v() * pow(2, 4 *8) + large_integer.LowPart.v()
@@ -279,12 +279,9 @@ class ExportFile(filescan.FileScan):
 		if not file_object.is_valid():
 			raise ExportException("consistency check failed (expected [_FILE_OBJECT @ 0x{0:08X}] to be a valid physical address)".format(file_object.v()))
 		file_name = self.parse_string(file_object.FileName)
-		if file_name == None:
-			raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected file name to be non-null)".format(file_object.v()))
-		if len(file_name) > 0 and file_name[0] == "\'":
-			file_name = file_name[1:]
-		if len(file_name) > 0 and file_name[-1] == "\'":
-			file_name = file_name[0:-1]
+		if file_name == None or file_name == '':
+			debug.warning("expected file name to be non-null and non-empty [_FILE_OBJECT @ 0x{0:08X}] (using _FILE_OBJECT address instead to distinguish file)".format(file_object.v()))
+			file_name = "FILE_OBJECT.0x{0:08X}".format(file_object.v())
 		section_object_ptr = obj.Object('_SECTION_OBJECT_POINTERS', offset = file_object.SectionObjectPointer, vm = self.kernel_address_space)
 		result = []
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
@@ -292,12 +289,12 @@ class ExportFile(filescan.FileScan):
 			try:
 				shared_cache_map = obj.Object('_SHARED_CACHE_MAP', offset = section_object_ptr.SharedCacheMap, vm = self.kernel_address_space)
 				if shared_cache_map == None:
-					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected _SHARED_CACHE_MAP to be non-null)".format(file_object.v()))
+					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected _SHARED_CACHE_MAP to be non-null for file name '{1}')".format(file_object.v(), file_name))
 				if shared_cache_map.FileSize == None:
-					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected FileSize to be non-null)".format(file_object.v()))
+					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected FileSize to be non-null for file name '{1}')".format(file_object.v(), file_name))
 				file_size = self.read_large_integer(shared_cache_map.FileSize)
 				if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
-					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected ValidDataLength to be bounded by file size)".format(file_object.v()))
+					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected ValidDataLength to be bounded by file size for file name '{1}')".format(file_object.v(), file_name))
 				result += [ ("_SHARED_CACHE_MAP", file_object, file_name, file_size, self.dump_shared_cache_map(shared_cache_map, file_size)) ]
 			except ExportException as exn:
 				debug.warning(exn)
