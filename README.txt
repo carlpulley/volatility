@@ -50,9 +50,14 @@ exportstack.py uses the distorm3 library (see http://code.google.com/p/distorm/)
 CURRENT LIMITATIONS
 ===================
 
-There is an unpatched bug in the Volatility 2.0 filescan plugin. This bug 
-causes _FILE_OBJECT addresses to need an extra magic value of #18 bytes adding 
-to them (so beware when using the --pool option or using _FILE_OBJECT addresses, 
-as returned by filescan, with the --fobj option!).
+There is an unpatched bug in the Volatility 2.0 filescan plugin - a patch is 
+currently available at:
+    http://volatility.googlecode.com/issues/attachment?aid=1520003000&name=handle_offset.patch&token=0aef9d04c7edd6c245b27635cec5bf8f
+This bug, when unpatched, causes _FILE_OBJECT addresses to need an extra magic 
+value of #18 bytes adding to them (so beware when using the --pool option or 
+using _FILE_OBJECT addresses, as returned by filescan, with the --fobj option!).
+
+The exportstack.py plugin currently generates output that is erroneous (see 
+https://github.com/carlpulley/volatility/issues/10).
 
 These limitations will change in the very near future.
