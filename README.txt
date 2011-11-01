@@ -16,7 +16,7 @@
 
 
 The code for the following plugins was originally written for Challenge 3 of 
-the Honeynet Forensic Challenge 2010 (Banking Troubles - see the v1.3 branch 
+the Honeynet Forensic Challenge 2010 (Banking Troubles - see https://github.com/carlpulley/volatility/tree/v1.3 
 and http://honeynet.org/challenges/2010_3_banking_troubles for more 
 information).
 
