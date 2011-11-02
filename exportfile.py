@@ -34,6 +34,7 @@ import os.path
 import math
 import struct
 import hashlib
+import datetime
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
@@ -91,8 +92,6 @@ class ExportFile(filescan.FileScan):
 
 	def __init__(self, config, *args):
 		filescan.FileScan.__init__(self, config, *args)
-		# FIXME: do we need a --dir option?
-		config.add_option("dir", short_option = 'D', type = 'str', action = 'store', help = "Directory in which to save exported files")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from an _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
@@ -101,8 +100,6 @@ class ExportFile(filescan.FileScan):
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
-		if not(bool(self._config.DIR)):
-			debug.error("--dir needs to be present")
 		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.fobj) ^ bool(self._config.pool)):
 			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.fobj) or bool(self._config.pool)):
 				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have not specified _any_ of these options)")
@@ -150,24 +147,26 @@ class ExportFile(filescan.FileScan):
 				debug.warning(exn)
 		return filter(None, result)
 
-	def render_xml(self, outfd, data):
-		# Process extracted file page data and then perform file reconstruction upon the results
+	def render_text(self, outfd, data):
 		outfd.write("<dfxml version=\"1.0\">\n")
+		outfd.write("  <source>\n")
+		outfd.write("    <image_filename>{0}</image_filename>\n".format(self._config.filename))
+		outfd.write("    <acquisition_date>{0}</acquisition_date>\n".format(datetime.datetime.utcnow().__str__()))
+		outfd.write("  </source>\n")
 		for file_data in data:
 			for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
 				outfd.write("  <fileobject>\n")
 				outfd.write("    <filename>{0}</filename>\n".format(file_name))
-				outfd.write("\nExporting {0} [_FILE_OBJECT @ 0x{1:08X}]:\n  {2}\n\n".format(data_type, fobj_inst.v(), file_name))
 				if data_type == "_SHARED_CACHE_MAP":
 					# _SHARED_CACHE_MAP processing
 					outfd.write("    <filesize>{0}</filesize>\n".format(file_size))
 					outfd.write("    <byte_runs>\n")
-					self.dump_shared_pages(outfd, data, fobj_inst, file_name, file_size, extracted_file_data)
+					self.dump_shared_pages(outfd, data, extracted_file_data)
 					outfd.write("    </byte_runs>\n")
 				elif data_type == "_CONTROL_AREA":
 					# _CONTROL_AREA processing
 					outfd.write("    <byte_runs>\n")
-					self.dump_control_pages(outfd, data, fobj_inst, file_name, extracted_file_data)
+					self.dump_control_pages(outfd, data, extracted_file_data)
 					outfd.write("    </byte_runs>\n")
 				outfd.write("  </fileobject>\n")
 		outfd.write("</dfxml>\n")
@@ -262,9 +261,12 @@ class ExportFile(filescan.FileScan):
 			(pte_addr, ) = struct.unpack('=I', self.kernel_address_space.read(base_addr + 4*pte, 4))
 			page_phy_addr = pte_addr & 0xFFFFF000
 			if page_phy_addr != 0 and self.flat_address_space.is_valid_address(page_phy_addr) and page_phy_addr != subsection.v():
-				result += [ (self.flat_address_space.read(page_phy_addr, 4*self.KB), pte) ]
+				page = self.flat_address_space.read(page_phy_addr, 4*self.KB)
+				page_md5 = hashlib.md5(page).hexdigest()
+				page_sha1 = hashlib.sha1(page).hexdigest()
+				result += [ ({ 'md5': page_md5, 'sha1': page_sha1 }, page_phy_addr, pte) ]
 			elif page_phy_addr != 0:
-				result += [ (None, pte) ]
+				result += [ (None, None, pte) ]
 		return result
 
 	def dump_shared_cache_map(self, shared_cache_map, file_size):
@@ -276,7 +278,10 @@ class ExportFile(filescan.FileScan):
 				vacb_base_addr = vacb.BaseAddress.v()
 				for page in range(0, 64):
 					if self.kernel_address_space.is_valid_address(vacb_base_addr + page*(4*self.KB)):
-						result += [ (self.kernel_address_space.read(vacb_base_addr + page*(4*self.KB), (4*self.KB)), section*(256*self.KB) + page*(4*self.KB), section*(256*self.KB) + (page + 1)*(4*self.KB) - 1) ]
+						page_data = self.kernel_address_space.read(vacb_base_addr + page*(4*self.KB), (4*self.KB))
+						page_md5 = hashlib.md5(page_data).hexdigest()
+						page_sha1 = hashlib.sha1(page_data).hexdigest()
+						result += [ ({ 'md5': page_md5, 'sha1': page_sha1 }, self.kernel_address_space.vtop(vacb_base_addr + page*(4*self.KB)), section*(256*self.KB) + page*(4*self.KB), section*(256*self.KB) + (page + 1)*(4*self.KB) - 1) ]
 		return result
 
 	def dump_control_area(self, control_area):
@@ -289,30 +294,25 @@ class ExportFile(filescan.FileScan):
 			num_of_sectors = subsection.NumberOfFullSectors
 			if sector == None:
 				sector = start_sector
-			sector_data = [ (page, pte_index) for page, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
-			result += map(lambda ((page, pte_index), position): (page, sector + position*8), zip(sector_data, range(0, len(sector_data))))
+			sector_data = [ (page, page_phy_addr, pte_index) for page, page_phy_addr, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
+			result += map(lambda ((page, page_phy_addr, pte_index), position): (page, page_phy_addr, sector + position*8), zip(sector_data, range(0, len(sector_data))))
 			sector += len(sector_data)*8
 		return result
 
-	def dump_data(self, outfd, data, start_addr, end_addr, data_md5, data_sha1):
-		# FIXME: fill in missing format arguments
-		outfd.write("      <byte_run offset=\"{0}\" fs_offset=\"{1}\" imp_offset=\"{2}\" len=\"{3}\">\n".format(, , , end_addr - start_addr + 1))
+	def dump_data(self, outfd, phy_offset, start_addr, end_addr, data_md5, data_sha1):
+		outfd.write("      <byte_run offset=\"{0}\" img_offset=\"{1}\" len=\"{2}\">\n".format(start_addr, phy_offset, end_addr - start_addr + 1))
 		outfd.write("        <hexdigest type=\"md5\">{0}</hexdigest>\n".format(data_md5))
 		outfd.write("        <hexdigest type=\"sha1\">{0}</hexdigest>\n".format(data_sha1))
 		outfd.write("      </byte_run>\n")
 
-	def dump_shared_pages(self, outfd, data, file_object, file_name, file_size, extracted_file_data):
-		for vacb, start_addr, end_addr in extracted_file_data:
-			vacb_md5 = hashlib.md5(vacb).hexdigest()
-			vacb_sha1 = hashlib.sha1(vacb).hexdigest()
-			self.dump_data(outfd, vacb, start_addr, end_addr, vacb_md5, vacb_sha1)
+	def dump_shared_pages(self, outfd, data, extracted_file_data):
+		for page, phy_offset, start_addr, end_addr in extracted_file_data:
+			self.dump_data(outfd, phy_offset, start_addr, end_addr, page['md5'], page['sha1'])
 
-	def dump_control_pages(self, outfd, data, file_object, file_name, extracted_file_data):
+	def dump_control_pages(self, outfd, data, extracted_file_data):
 		sorted_extracted_fobjs = sorted(extracted_file_data, key = lambda tup: tup[1])
-		for page, start_sector in sorted_extracted_fobjs:
+		for page, page_phy_addr, start_sector in sorted_extracted_fobjs:
 			if page != None:
 				start_addr = start_sector*512
 				end_addr = (start_sector + 8)*512 - 1
-				page_md5 = hashlib.md5(page).hexdigest()
-				page_sha1 = hashlib.sha1(page).hexdigest()
-				self.dump_data(outfd, page, start_addr, end_addr, page_md5, page_sha1)
+				self.dump_data(outfd, page_phy_addr, start_addr, end_addr, page['md5'], page['sha1'])
