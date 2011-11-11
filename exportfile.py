@@ -158,6 +158,7 @@ class ExportFile(filescan.FileScan):
 				debug.warning(exn)
 		return filter(None, result)
 
+	# TODO: add in timestamp etc. information to fileobjects
 	def render_text(self, outfd, file_data):
 		outfd.write("<?xml version='1.0' encoding='UTF-8'?>\n")
 		outfd.write("<dfxml xmloutputversion=\"0.3\">\n")
@@ -175,11 +176,11 @@ class ExportFile(filescan.FileScan):
 			outfd.write("      <command_line>{0}/bin/python {1}</command_line>\n".format(unicode(sys.prefix), unicode(" ".join(sys.argv))))
 		outfd.write("      <uid>{0}</uid>\n".format(os.getuid()))
 		outfd.write("      <username>{0}</username>\n".format(getpass.getuser()))
-		outfd.write("      <start_date>{0:%Y-%m-%d %H:%M:%S}</start_date>\n".format(datetime.datetime.utcnow()))
+		outfd.write("      <start_date>{0:%Y-%m-%dT%H:%M:%SZ}</start_date>\n".format(datetime.datetime.utcnow()))
 		outfd.write("    </execution_environment>\n")
 		outfd.write("  </creator>\n")
 		outfd.write("  <source>\n")
-		outfd.write("    <image_filename>{0}</image_filename>\n".format(self.flat_address_space.name))
+		outfd.write("    <image_filename>{0}</image_filename>\n".format(unicode(self.flat_address_space.name)))
 		outfd.write("  </source>\n")
 		for file_obj in sorted(file_data, key=lambda x: x['object']):
 			outfd.write("  <fileobject offset=\"{0:d}\" section=\"{1:d}\">\n".format(file_obj['object'], file_obj['section']))
