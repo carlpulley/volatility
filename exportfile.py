@@ -29,10 +29,13 @@ This plugin implements the exporting and saving of _FILE_OBJECT's
 
 import re
 import commands as exe
+import getpass
 import os
 import os.path
 import math
+import platform
 import struct
+import sys
 import hashlib
 import datetime
 import volatility.utils as utils
@@ -41,6 +44,10 @@ import volatility.win32.tasks as tasks
 import volatility.debug as debug
 import volatility.commands as commands
 import volatility.plugins.filescan as filescan
+try:
+	import magic
+except:
+	print "python-magic is not installed, see https://github.com/ahupp/python-magic for further information"
 
 class ExportException(Exception):
 	"""General exception for handling warnings and errors during exporting of files"""
@@ -53,6 +60,10 @@ class ExportFile(filescan.FileScan):
 	
 	All exported files are written to a DFXML file. This XML file may then be 
 	processed using various AFFLib compatible tools (e.g. PyFlag).
+	
+	Should python-magic (see https://github.com/ahupp/python-magic) be 
+	installed, then the DFXML output will contain libmagic tags for each file 
+	page.
 	
 	This plugin is particularly useful when one expects memory to be fragmented, 
 	and so, linear carving techniques (e.g. using scalpel or foremost) might be 
@@ -85,7 +96,7 @@ class ExportFile(filescan.FileScan):
 		copyright = 'Copyright (c) 2010 Carl Pulley',
 		contact = 'c.j.pulley@hud.ac.uk',
 		license = 'GNU General Public License 2.0 or later',
-		url = 'http://compeng.hud.ac.uk/scomcjp',
+		url = 'http://helios.hud.ac.uk/scomcjp',
 		os = ['WinXPSP2x86', 'WinXPSP3x86'],
 		version = '1.0',
 		)
@@ -150,28 +161,44 @@ class ExportFile(filescan.FileScan):
 	def render_text(self, outfd, file_data):
 		outfd.write("<?xml version='1.0' encoding='UTF-8'?>\n")
 		outfd.write("<dfxml xmloutputversion=\"0.3\">\n")
-		outfd.write("  <metadata xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns='http://afflib.org/fiwalk/' xmlns:dc='http://purl.org/dc/elements/1.1/'>\n")
-		outfd.write("    <dc:type>Hash Set</dc:type>\n")
-		outfd.write("  </metadata>\n")
 		outfd.write("  <creator>\n")
-		outfd.write("    <program>volatility</program>\n")
-		outfd.write("    <version>{0:d}</version>\n".format(1118))
+		outfd.write("    <program>Volatility Framework: exportfile plugin</program>\n")
+		outfd.write("    <version>{0}</version>\n".format(self.meta_info['version']))
+		outfd.write("    <execution_environment>\n")
+		sysname, nodename, release, version, machine, processor = platform.uname()
+		outfd.write("      <os_sysname>{0}</os_sysname>\n".format(sysname))
+		outfd.write("      <os_release>{0}</os_release>\n".format(release))
+		outfd.write("      <os_version>{0}</os_version>\n".format(version))
+		outfd.write("      <host>{0}</host>\n".format(nodename))
+		outfd.write("      <arch>{0}</arch>\n".format(processor))
+		if sys.argv:
+			outfd.write("      <command_line>{0}/bin/python {1}</command_line>\n".format(unicode(sys.prefix), unicode(" ".join(sys.argv))))
+		outfd.write("      <uid>{0}</uid>\n".format(os.getuid()))
+		outfd.write("      <username>{0}</username>\n".format(getpass.getuser()))
+		outfd.write("      <start_date>{0:%Y-%m-%d %H:%M:%S}</start_date>\n".format(datetime.datetime.utcnow()))
+		outfd.write("    </execution_environment>\n")
 		outfd.write("  </creator>\n")
 		outfd.write("  <source>\n")
 		outfd.write("    <image_filename>{0}</image_filename>\n".format(self.flat_address_space.name))
-		outfd.write("    <acquisition_date>{0:%Y-%m-%d %H:%M:%S}</acquisition_date>\n".format(datetime.datetime.utcnow()))
 		outfd.write("  </source>\n")
 		for file_obj in sorted(file_data, key=lambda x: x['object']):
 			outfd.write("  <fileobject offset=\"{0:d}\" section=\"{1:d}\">\n".format(file_obj['object'], file_obj['section']))
 			if 'name' in file_obj:
-				outfd.write("    <filename>{0}</filename>\n".format(file_obj['name']))
+				outfd.write("    <filename>{0}</filename>\n".format(unicode(file_obj['name'])))
 			if 'size' in file_obj:
 				outfd.write("    <filesize>{0:d}</filesize>\n".format(file_obj['size']))
-			if 'sectors' in page:
-				outfd.write("      <sectorsize>{0:d}</sectorsize>\n".format(int(page['sectors'])*512))
+			sector_sizes = set([ int(p['sectors']) for p in file_obj['pages'] if 'sectors' in p ])
+			if len(sector_sizes) == 1:
+				outfd.write("    <sectorsize>512</sectorsize>\n")
+				outfd.write("    <sectors>{0:d}</sectors>\n".format(list(sector_sizes)[0]))
+			first_pages = [ p for p in file_obj['pages'] if p['start_addr'] == 0 ]
+			if len(first_pages) == 1 and 'libmagic' in first_pages[0]:
+				outfd.write("    <libmagic>{0}</libmagic>\n".format(first_pages[0]['libmagic']))
 			outfd.write("    <byte_runs>\n")
 			for page in sorted(file_obj['pages'], key=lambda x: x['start_addr']):
 				outfd.write("      <byte_run offset=\"{0:d}\" img_offset=\"{1:d}\" len=\"{2:d}\">\n".format(page['start_addr'], page['offset'], page['size']))
+				if 'libmagic' in page:
+					outfd.write("    <libmagic>{0}</libmagic>\n".format(page['libmagic']))
 				for hash_type, hash_value in page['hash'].items():
 					outfd.write("        <hexdigest type=\"{0}\">{1}</hexdigest>\n".format(hash_type, hash_value))
 				outfd.write("      </byte_run>\n")
@@ -279,9 +306,13 @@ class ExportFile(filescan.FileScan):
 				page = self.flat_address_space.read(page_phy_addr, 4*self.KB)
 				page_md5 = hashlib.md5(page).hexdigest()
 				page_sha1 = hashlib.sha1(page).hexdigest()
-				result += [ ({ 'md5': page_md5, 'sha1': page_sha1 }, page_phy_addr, pte) ]
+				try:
+					libmagic = magic.from_buffer(page)
+				except:
+					libmagic = None # We assume that python-magic is not installed and ignore any errors
+				result += [ ({ 'md5': page_md5, 'sha1': page_sha1 }, libmagic, page_phy_addr, pte) ]
 			elif page_phy_addr != 0:
-				result += [ (None, None, pte) ]
+				result += [ (None, None, None, pte) ]
 		return result
 
 	def dump_shared_cache_map(self, shared_cache_map, file_size):
@@ -297,6 +328,10 @@ class ExportFile(filescan.FileScan):
 						page_md5 = hashlib.md5(page_data).hexdigest()
 						page_sha1 = hashlib.sha1(page_data).hexdigest()
 						result_page = { 'hash': { 'md5': page_md5, 'sha1': page_sha1 }, 'offset': self.kernel_address_space.vtop(vacb_base_addr + page*(4*self.KB)), 'start_addr': section*(256*self.KB) + page*(4*self.KB), 'size': 4*self.KB }
+						try:
+							result_page['libmagic'] = magic.from_buffer(page_data)
+						except:
+							pass # We assume that python-magic is not installed and ignore any errors
 						if result_page not in result:
 							result += [ result_page ]
 		return result
@@ -311,8 +346,8 @@ class ExportFile(filescan.FileScan):
 			num_of_sectors = subsection.NumberOfFullSectors
 			if sector == None:
 				sector = start_sector
-			sector_data = [ (page, page_phy_addr, pte_index) for page, page_phy_addr, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
-			result_pages = map(lambda ((page, page_phy_addr, pte_index), position): { 'hash': page, 'sectors': subsection.NumberOfFullSectors, 'offset': page_phy_addr, 'start_addr': (sector + position*8)*512, 'size': 4*self.KB }, zip(sector_data, range(0, len(sector_data))))
+			sector_data = [ (page, libmagic, page_phy_addr, pte_index) for page, libmagic, page_phy_addr, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
+			result_pages = map(lambda ((page, libmagic, page_phy_addr, pte_index), position): ({ 'hash': page, 'libmagic': libmagic, 'sectors': subsection.NumberOfFullSectors, 'offset': page_phy_addr, 'start_addr': (sector + position*8)*512, 'size': 4*self.KB } if libmagic else { 'hash': page, 'sectors': subsection.NumberOfFullSectors, 'offset': page_phy_addr, 'start_addr': (sector + position*8)*512, 'size': 4*self.KB }), zip(sector_data, range(0, len(sector_data))))
 			for result_page in result_pages:
 				if result_page not in result:
 					result += [ result_page ]
