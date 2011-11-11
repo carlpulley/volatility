@@ -63,7 +63,8 @@ class ExportFile(filescan.FileScan):
 	
 	Should python-magic (see https://github.com/ahupp/python-magic) be 
 	installed, then the DFXML output will contain libmagic tags for each file 
-	page.
+	page. Libmagic values for fileobject's are inherrited from the file's first 
+	page (should one exist).
 	
 	This plugin is particularly useful when one expects memory to be fragmented, 
 	and so, linear carving techniques (e.g. using scalpel or foremost) might be 
@@ -103,6 +104,7 @@ class ExportFile(filescan.FileScan):
 
 	def __init__(self, config, *args):
 		filescan.FileScan.__init__(self, config, *args)
+		config.add_option("xml", type = 'string', action = 'store', help = "File name to save DFXML output to")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
 		config.add_option("eproc", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from an _EPROCESS offset (kernel address)")
 		config.add_option("fobj", type = 'int', action = 'store', help = "Extract a given _FILE_OBJECT offset (physical address)")
@@ -111,6 +113,8 @@ class ExportFile(filescan.FileScan):
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
+		if not(bool(self._config.xml)):
+			debug.error("you *need* to specify a --xml <filename> option")
 		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.fobj) ^ bool(self._config.pool)):
 			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.fobj) or bool(self._config.pool)):
 				debug.error("exactly *ONE* of the options --pid, --eproc, --fobj or --pool must be specified (you have not specified _any_ of these options)")
@@ -160,52 +164,57 @@ class ExportFile(filescan.FileScan):
 
 	# TODO: add in timestamp etc. information to fileobjects
 	def render_text(self, outfd, file_data):
-		outfd.write("<?xml version='1.0' encoding='UTF-8'?>\n")
-		outfd.write("<dfxml xmloutputversion=\"0.3\">\n")
-		outfd.write("  <creator>\n")
-		outfd.write("    <program>Volatility Framework: exportfile plugin</program>\n")
-		outfd.write("    <version>{0}</version>\n".format(self.meta_info['version']))
-		outfd.write("    <execution_environment>\n")
+		xmlfd = open(self._config.xml, "wb")
+		xmlfd.write("<?xml version='1.0' encoding='UTF-8'?>\n")
+		xmlfd.write("<dfxml xmloutputversion=\"0.3\">\n")
+		xmlfd.write("  <creator>\n")
+		xmlfd.write("    <program>Volatility Framework: exportfile plugin</program>\n")
+		xmlfd.write("    <version>{0}</version>\n".format(self.meta_info['version']))
+		xmlfd.write("    <execution_environment>\n")
 		sysname, nodename, release, version, machine, processor = platform.uname()
-		outfd.write("      <os_sysname>{0}</os_sysname>\n".format(sysname))
-		outfd.write("      <os_release>{0}</os_release>\n".format(release))
-		outfd.write("      <os_version>{0}</os_version>\n".format(version))
-		outfd.write("      <host>{0}</host>\n".format(nodename))
-		outfd.write("      <arch>{0}</arch>\n".format(processor))
+		xmlfd.write("      <os_sysname>{0}</os_sysname>\n".format(sysname))
+		xmlfd.write("      <os_release>{0}</os_release>\n".format(release))
+		xmlfd.write("      <os_version>{0}</os_version>\n".format(unicode(version)))
+		xmlfd.write("      <host>{0}</host>\n".format(nodename))
+		xmlfd.write("      <arch>{0}</arch>\n".format(processor))
 		if sys.argv:
-			outfd.write("      <command_line>{0}/bin/python {1}</command_line>\n".format(unicode(sys.prefix), unicode(" ".join(sys.argv))))
-		outfd.write("      <uid>{0}</uid>\n".format(os.getuid()))
-		outfd.write("      <username>{0}</username>\n".format(getpass.getuser()))
-		outfd.write("      <start_date>{0:%Y-%m-%dT%H:%M:%SZ}</start_date>\n".format(datetime.datetime.utcnow()))
-		outfd.write("    </execution_environment>\n")
-		outfd.write("  </creator>\n")
-		outfd.write("  <source>\n")
-		outfd.write("    <image_filename>{0}</image_filename>\n".format(unicode(self.flat_address_space.name)))
-		outfd.write("  </source>\n")
+			xmlfd.write("      <command_line>{0}/bin/python {1}</command_line>\n".format(unicode(sys.prefix), unicode(" ".join(sys.argv))))
+		xmlfd.write("      <uid>{0}</uid>\n".format(os.getuid()))
+		xmlfd.write("      <username>{0}</username>\n".format(getpass.getuser()))
+		xmlfd.write("      <start_date>{0:%Y-%m-%dT%H:%M:%SZ}</start_date>\n".format(datetime.datetime.utcnow()))
+		xmlfd.write("    </execution_environment>\n")
+		xmlfd.write("  </creator>\n")
+		xmlfd.write("  <source>\n")
+		xmlfd.write("    <image_filename>{0}</image_filename>\n".format(unicode(self.flat_address_space.name)))
+		image_contents = open(self.flat_address_space.name, 'r').read()
+		xmlfd.write("    <hexdigest type=\"md5\">{0}</hexdigest>\n".format(hashlib.md5(image_contents).hexdigest()))
+		xmlfd.write("    <hexdigest type=\"sha1\">{0}</hexdigest>\n".format(hashlib.sha1(image_contents).hexdigest()))
+		xmlfd.write("  </source>\n")
 		for file_obj in sorted(file_data, key=lambda x: x['object']):
-			outfd.write("  <fileobject offset=\"{0:d}\" section=\"{1:d}\">\n".format(file_obj['object'], file_obj['section']))
+			xmlfd.write("  <fileobject offset=\"{0:d}\" section=\"{1:d}\">\n".format(file_obj['object'], file_obj['section']))
 			if 'name' in file_obj:
-				outfd.write("    <filename>{0}</filename>\n".format(unicode(file_obj['name'])))
+				xmlfd.write("    <filename>{0}</filename>\n".format(unicode(file_obj['name'])))
 			if 'size' in file_obj:
-				outfd.write("    <filesize>{0:d}</filesize>\n".format(file_obj['size']))
+				xmlfd.write("    <filesize>{0:d}</filesize>\n".format(file_obj['size']))
 			sector_sizes = set([ int(p['sectors']) for p in file_obj['pages'] if 'sectors' in p ])
 			if len(sector_sizes) == 1:
-				outfd.write("    <sectorsize>512</sectorsize>\n")
-				outfd.write("    <sectors>{0:d}</sectors>\n".format(list(sector_sizes)[0]))
+				xmlfd.write("    <sectorsize>512</sectorsize>\n")
+				xmlfd.write("    <sectors>{0:d}</sectors>\n".format(list(sector_sizes)[0]))
 			first_pages = [ p for p in file_obj['pages'] if p['start_addr'] == 0 ]
 			if len(first_pages) == 1 and 'libmagic' in first_pages[0]:
-				outfd.write("    <libmagic>{0}</libmagic>\n".format(first_pages[0]['libmagic']))
-			outfd.write("    <byte_runs>\n")
+				xmlfd.write("    <libmagic>{0}</libmagic>\n".format(first_pages[0]['libmagic']))
+			xmlfd.write("    <byte_runs>\n")
 			for page in sorted(file_obj['pages'], key=lambda x: x['start_addr']):
-				outfd.write("      <byte_run offset=\"{0:d}\" img_offset=\"{1:d}\" len=\"{2:d}\">\n".format(page['start_addr'], page['offset'], page['size']))
+				xmlfd.write("      <byte_run offset=\"{0:d}\" img_offset=\"{1:d}\" len=\"{2:d}\">\n".format(page['start_addr'], page['offset'], page['size']))
 				if 'libmagic' in page:
-					outfd.write("    <libmagic>{0}</libmagic>\n".format(page['libmagic']))
+					xmlfd.write("    <libmagic>{0}</libmagic>\n".format(page['libmagic']))
 				for hash_type, hash_value in page['hash'].items():
-					outfd.write("        <hexdigest type=\"{0}\">{1}</hexdigest>\n".format(hash_type, hash_value))
-				outfd.write("      </byte_run>\n")
-			outfd.write("    </byte_runs>\n")
-			outfd.write("  </fileobject>\n")
-		outfd.write("</dfxml>\n")
+					xmlfd.write("        <hexdigest type=\"{0}\">{1}</hexdigest>\n".format(hash_type, hash_value))
+				xmlfd.write("      </byte_run>\n")
+			xmlfd.write("    </byte_runs>\n")
+			xmlfd.write("  </fileobject>\n")
+		xmlfd.write("</dfxml>\n")
+		xmlfd.close()
 
 	KB = 0x400
 	_1KB = KB
