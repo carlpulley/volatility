@@ -147,28 +147,36 @@ class ExportFile(filescan.FileScan):
 				debug.warning(exn)
 		return filter(None, result)
 
-	def render_text(self, outfd, data):
-		outfd.write("<dfxml version=\"1.0\">\n")
+	def render_text(self, outfd, file_data):
+		outfd.write("<?xml version='1.0' encoding='UTF-8'?>\n")
+		outfd.write("<dfxml xmloutputversion=\"0.3\">\n")
+		outfd.write("  <metadata xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xmlns='http://afflib.org/fiwalk/' xmlns:dc='http://purl.org/dc/elements/1.1/'>\n")
+		outfd.write("    <dc:type>Hash Set</dc:type>\n")
+		outfd.write("  </metadata>\n")
+		outfd.write("  <creator>\n")
+		outfd.write("    <program>volatility</program>\n")
+		outfd.write("    <version>{0:d}</version>\n".format(1118))
+		outfd.write("  </creator>\n")
 		outfd.write("  <source>\n")
-		outfd.write("    <image_filename>{0}</image_filename>\n".format(self._config.filename))
-		outfd.write("    <acquisition_date>{0}</acquisition_date>\n".format(datetime.datetime.utcnow().__str__()))
+		outfd.write("    <image_filename>{0}</image_filename>\n".format(self.flat_address_space.name))
+		outfd.write("    <acquisition_date>{0:%Y-%m-%d %H:%M:%S}</acquisition_date>\n".format(datetime.datetime.utcnow()))
 		outfd.write("  </source>\n")
-		for file_data in data:
-			for data_type, fobj_inst, file_name, file_size, extracted_file_data in file_data:
-				outfd.write("  <fileobject>\n")
-				outfd.write("    <filename>{0}</filename>\n".format(file_name))
-				if data_type == "_SHARED_CACHE_MAP":
-					# _SHARED_CACHE_MAP processing
-					outfd.write("    <filesize>{0}</filesize>\n".format(file_size))
-					outfd.write("    <byte_runs>\n")
-					self.dump_shared_pages(outfd, data, extracted_file_data)
-					outfd.write("    </byte_runs>\n")
-				elif data_type == "_CONTROL_AREA":
-					# _CONTROL_AREA processing
-					outfd.write("    <byte_runs>\n")
-					self.dump_control_pages(outfd, data, extracted_file_data)
-					outfd.write("    </byte_runs>\n")
-				outfd.write("  </fileobject>\n")
+		for file_obj in sorted(file_data, key=lambda x: x['object']):
+			outfd.write("  <fileobject offset=\"{0:d}\" section=\"{1:d}\">\n".format(file_obj['object'], file_obj['section']))
+			if 'name' in file_obj:
+				outfd.write("    <filename>{0}</filename>\n".format(file_obj['name']))
+			if 'size' in file_obj:
+				outfd.write("    <filesize>{0:d}</filesize>\n".format(file_obj['size']))
+			if 'sectors' in page:
+				outfd.write("      <sectorsize>{0:d}</sectorsize>\n".format(int(page['sectors'])*512))
+			outfd.write("    <byte_runs>\n")
+			for page in sorted(file_obj['pages'], key=lambda x: x['start_addr']):
+				outfd.write("      <byte_run offset=\"{0:d}\" img_offset=\"{1:d}\" len=\"{2:d}\">\n".format(page['start_addr'], page['offset'], page['size']))
+				for hash_type, hash_value in page['hash'].items():
+					outfd.write("        <hexdigest type=\"{0}\">{1}</hexdigest>\n".format(hash_type, hash_value))
+				outfd.write("      </byte_run>\n")
+			outfd.write("    </byte_runs>\n")
+			outfd.write("  </fileobject>\n")
 		outfd.write("</dfxml>\n")
 
 	KB = 0x400
@@ -208,15 +216,16 @@ class ExportFile(filescan.FileScan):
 			tree_depth = math.ceil((math.ceil(math.log(file_size, 2)) - 18)/7)
 			return self.walk_vacb_tree(tree_depth, shared_cache_map.Vacbs.v())
 
+	# TODO: add in volume information to returned dictionaries (e.g. from DeviceObject or Vpb?)
+	# TODO: factor in RelatedFileObject
 	def dump_file_object(self, file_object):
 		if not file_object.is_valid():
 			raise ExportException("consistency check failed (expected [_FILE_OBJECT @ 0x{0:08X}] to be a valid physical address)".format(file_object.v()))
 		file_name = self.parse_string(file_object.FileName)
-		if file_name == None or file_name == '':
-			debug.warning("expected file name to be non-null and non-empty [_FILE_OBJECT @ 0x{0:08X}] (using _FILE_OBJECT address instead to distinguish file)".format(file_object.v()))
-			file_name = "FILE_OBJECT.0x{0:08X}".format(file_object.v())
+		if file_name == None:
+			debug.warning("expected file name to be non-null [_FILE_OBJECT @ 0x{0:08X}]".format(file_object.v()))
 		section_object_ptr = obj.Object('_SECTION_OBJECT_POINTERS', offset = file_object.SectionObjectPointer, vm = self.kernel_address_space)
-		result = []
+		result = None
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
 			# Shared Cache Map
 			try:
@@ -228,21 +237,27 @@ class ExportFile(filescan.FileScan):
 				file_size = self.read_large_integer(shared_cache_map.FileSize)
 				if self.read_large_integer(shared_cache_map.ValidDataLength) > file_size:
 					raise ExportException("consistency check failed [_FILE_OBJECT @ 0x{0:08X}] (expected ValidDataLength to be bounded by file size for file name '{1}')".format(file_object.v(), file_name))
-				result += [ ("_SHARED_CACHE_MAP", file_object, file_name, file_size, self.dump_shared_cache_map(shared_cache_map, file_size)) ]
+				result = { 'object': file_object.v(), 'section': section_object_ptr.v(), 'size': file_size, 'pages': self.dump_shared_cache_map(shared_cache_map, file_size) }
+				if file_name:
+					result['name'] = file_name
 			except ExportException as exn:
 				debug.warning(exn)
 		if section_object_ptr.DataSectionObject != 0 and section_object_ptr.DataSectionObject != None:
 			# Data Section Object
 			try:
 				control_area = obj.Object("_CONTROL_AREA", offset = section_object_ptr.DataSectionObject, vm = self.kernel_address_space)
-				result += [ ("_CONTROL_AREA", file_object, file_name, None, self.dump_control_area(control_area)) ]
+				result = { 'object': file_object.v(), 'section': section_object_ptr.v(), 'pages': self.dump_control_area(control_area) }
+				if file_name:
+					result['name'] = file_name
 			except ExportException as exn:
 				debug.warning(exn)
 		if section_object_ptr.ImageSectionObject != 0 and section_object_ptr.ImageSectionObject != None:
 			# Image Section Object
 			try:
 				control_area = obj.Object("_CONTROL_AREA", offset = section_object_ptr.ImageSectionObject, vm = self.kernel_address_space)
-				result += [ ("_CONTROL_AREA", file_object, file_name, None, self.dump_control_area(control_area)) ]
+				result = { 'object': file_object.v(), 'section': section_object_ptr.v(), 'pages': self.dump_control_area(control_area) }
+				if file_name:
+					result['name'] = file_name
 			except ExportException as exn:
 				debug.warning(exn)
 		return result
@@ -281,7 +296,9 @@ class ExportFile(filescan.FileScan):
 						page_data = self.kernel_address_space.read(vacb_base_addr + page*(4*self.KB), (4*self.KB))
 						page_md5 = hashlib.md5(page_data).hexdigest()
 						page_sha1 = hashlib.sha1(page_data).hexdigest()
-						result += [ ({ 'md5': page_md5, 'sha1': page_sha1 }, self.kernel_address_space.vtop(vacb_base_addr + page*(4*self.KB)), section*(256*self.KB) + page*(4*self.KB), section*(256*self.KB) + (page + 1)*(4*self.KB) - 1) ]
+						result_page = { 'hash': { 'md5': page_md5, 'sha1': page_sha1 }, 'offset': self.kernel_address_space.vtop(vacb_base_addr + page*(4*self.KB)), 'start_addr': section*(256*self.KB) + page*(4*self.KB), 'size': 4*self.KB }
+						if result_page not in result:
+							result += [ result_page ]
 		return result
 
 	def dump_control_area(self, control_area):
@@ -295,24 +312,9 @@ class ExportFile(filescan.FileScan):
 			if sector == None:
 				sector = start_sector
 			sector_data = [ (page, page_phy_addr, pte_index) for page, page_phy_addr, pte_index in self.read_pte_array(subsection, subsection.SubsectionBase.v(), subsection.PtesInSubsection) if pte_index <= num_of_sectors and page != None ]
-			result += map(lambda ((page, page_phy_addr, pte_index), position): (page, page_phy_addr, sector + position*8), zip(sector_data, range(0, len(sector_data))))
+			result_pages = map(lambda ((page, page_phy_addr, pte_index), position): { 'hash': page, 'sectors': subsection.NumberOfFullSectors, 'offset': page_phy_addr, 'start_addr': (sector + position*8)*512, 'size': 4*self.KB }, zip(sector_data, range(0, len(sector_data))))
+			for result_page in result_pages:
+				if result_page not in result:
+					result += [ result_page ]
 			sector += len(sector_data)*8
 		return result
-
-	def dump_data(self, outfd, phy_offset, start_addr, end_addr, data_md5, data_sha1):
-		outfd.write("      <byte_run offset=\"{0}\" img_offset=\"{1}\" len=\"{2}\">\n".format(start_addr, phy_offset, end_addr - start_addr + 1))
-		outfd.write("        <hexdigest type=\"md5\">{0}</hexdigest>\n".format(data_md5))
-		outfd.write("        <hexdigest type=\"sha1\">{0}</hexdigest>\n".format(data_sha1))
-		outfd.write("      </byte_run>\n")
-
-	def dump_shared_pages(self, outfd, data, extracted_file_data):
-		for page, phy_offset, start_addr, end_addr in extracted_file_data:
-			self.dump_data(outfd, phy_offset, start_addr, end_addr, page['md5'], page['sha1'])
-
-	def dump_control_pages(self, outfd, data, extracted_file_data):
-		sorted_extracted_fobjs = sorted(extracted_file_data, key = lambda tup: tup[1])
-		for page, page_phy_addr, start_sector in sorted_extracted_fobjs:
-			if page != None:
-				start_addr = start_sector*512
-				end_addr = (start_sector + 8)*512 - 1
-				self.dump_data(outfd, page_phy_addr, start_addr, end_addr, page['md5'], page['sha1'])
