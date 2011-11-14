@@ -103,6 +103,7 @@ class ExportFile(filescan.FileScan):
 		)
 
 	def __init__(self, config, *args):
+		self.start_time = datetime.datetime.utcnow()
 		filescan.FileScan.__init__(self, config, *args)
 		config.add_option("xml", type = 'string', action = 'store', help = "File name to save DFXML output to")
 		config.add_option("pid", type = 'int', action = 'store', help = "Extract all associated _FILE_OBJECT's from a PID")
@@ -181,7 +182,7 @@ class ExportFile(filescan.FileScan):
 			xmlfd.write("      <command_line>{0}/bin/python {1}</command_line>\n".format(unicode(sys.prefix), unicode(" ".join(sys.argv))))
 		xmlfd.write("      <uid>{0}</uid>\n".format(os.getuid()))
 		xmlfd.write("      <username>{0}</username>\n".format(getpass.getuser()))
-		xmlfd.write("      <start_date>{0:%Y-%m-%dT%H:%M:%SZ}</start_date>\n".format(datetime.datetime.utcnow()))
+		xmlfd.write("      <start_date>{0:%Y-%m-%dT%H:%M:%SZ}</start_date>\n".format(self.start_time))
 		xmlfd.write("    </execution_environment>\n")
 		xmlfd.write("  </creator>\n")
 		xmlfd.write("  <source>\n")
