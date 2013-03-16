@@ -296,10 +296,10 @@ class ExportStack(filescan.FileScan):
 			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
 		outfd.write("\n")
 		for reg, data_reg in [('CS', 'SegCs'), ('SS', 'HardwareSegSs'), ('DS', 'SegDs'), ('ES', 'SegEs')]:
-			outfd.write("    {0}:  0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
 		outfd.write("\n")
-		for reg, data_reg in [('GS: ', 'SegGs'), ('EFlags:', 'EFlags')]:
-			outfd.write("    {0} 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
+		for reg, data_reg in [('FS', 'SegFs'), ('GS', 'SegGs'), ('EFlags', 'EFlags')]:
+			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
 		outfd.write("\n")
 		for reg in ['Dr0', 'Dr1', 'Dr2', 'Dr3']:
 			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
