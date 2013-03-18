@@ -332,6 +332,7 @@ class ExportStack(filescan.FileScan):
 		outfd.write("  User Time: {0}\n".format(ethread.Tcb.UserTime))
 		outfd.write("  State: {0}\n".format(self.get_kthread_state(ethread.Tcb.State)))
 		outfd.write("  TEB: 0x{0:08X}\n".format(ethread.Tcb.Teb))
+		outfd.write("  CRC3: 0x{0:08X}\n".format(ethread.ThreadsProcess.PageDirectoryPte))
 		if self.read_bitmap(ethread.CrossThreadFlags, 0):
 			outfd.write("  Terminated thread\n")
 		if self.read_bitmap(ethread.CrossThreadFlags, 1):
