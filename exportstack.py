@@ -31,29 +31,15 @@ import re
 import os.path
 try:
 	import distorm3
+	distorm3_installed = True
 except ImportError:
-	print "distorm3 is not installed, see http://code.google.com/p/distorm/ for further information"
+	distorm3_installed = False
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
 import volatility.debug as debug
 import volatility.commands as commands
 import volatility.plugins.filescan as filescan
-
-w32_types = {
-	'_W32THREAD' : [ 0x28, { \
-		'pEThread' : [ 0x0, ['pointer', ['_ETHREAD']]], \
-		'RefCount' : [ 0x4, ['unsigned long'] ], \
-		'ptlW32' : [ 0x8, ['pointer', ['void']] ], \
-		'pgdiDcattr' : [ 0xc, ['pointer', ['void']] ], \
-		'pgdiBrushAttr' : [ 0x10, ['pointer', ['void']] ], \
-		'pUMPDObjs' : [ 0x14, ['pointer', ['void']] ], \
-		'pUMPDHeap' : [ 0x18, ['pointer', ['void']] ], \
-		'dwEngAcquireCount' : [ 0x1c, ['pointer', ['unsigned long']] ], \
-		'pSemTable' : [ 0x20, ['pointer', ['void']] ], \
-		'pUMPDObj' : [ 0x24, ['pointer', ['void']] ] \
-	}]
-}
 
 class ExportException(Exception):
 	"""General exception for handling warnings and errors during exporting of stacks"""
@@ -108,7 +94,6 @@ class ExportStack(filescan.FileScan):
 
 	def calculate(self):
 		self.kernel_address_space = utils.load_as(self._config)
-		self.kernel_address_space.profile.add_types(w32_types)
 		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
 		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.ethrd)):
 			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.eproc)):
@@ -156,12 +141,14 @@ class ExportStack(filescan.FileScan):
 	def get_stack_frames(self, start_ebp, stack_base, stack_limit, start_eip=None):
 		def stack_frame_iterator_up():
 			# Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
+			# TODO: need to build up a tree data structure here (there may have been multiple old calls that returned to the current frame)
 			ebp = start_ebp
 			ebp_ptr = start_ebp - 4
 			while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
-				# FIXME: check the alignment of stack frames (might be able to decrement with larger values?)
+				# From [5], we assume an alignment for stack frames based on the memory model's bit size
+				alignment = 4 if self.kernel_address_space.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
 				if not self.process_address_space.is_valid_address(ebp_ptr):
-					ebp_ptr -= 1
+					ebp_ptr -= alignment
 				else:
 					ebp_value = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr))
 					if ebp_value == ebp:
@@ -170,7 +157,7 @@ class ExportStack(filescan.FileScan):
 						yield { 'eip':eip, 'ebp':ebp }
 						ebp_ptr -= 4
 					else:
-						ebp_ptr -= 1
+						ebp_ptr -= alignment
 		def stack_frame_iterator_down():
 			# Follow the EBP chain downloads and so locate stack frames
 			if start_eip != None:
@@ -277,8 +264,11 @@ class ExportStack(filescan.FileScan):
 			if frame['ebp'] >= 0x80:
 				self.dump_stack_frame(outfd, frame['ebp']-0x40, 0x8d, highlight=frame['ebp'], stack_type=stack_type)
 			if frame['eip'] > 0x20:
-				outfd.write("  Calling Code Dissassembly:\n")
-				self.disasm(outfd, frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
+				if distorm3_installed:
+					outfd.write("  Calling Code Dissassembly:\n")
+					self.disasm(outfd, frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
+				else:
+					outfd.write("  WARNING: Skipping Code Dissassembly: distorm3 is not installed (see http://code.google.com/p/distorm/ for further information)\n")
 			if 'highlight' in frame:
 				self.colour_stack.pop()
 				outfd.write("\n".join(self.colour_stack))
