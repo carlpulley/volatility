@@ -86,6 +86,8 @@ class ExportStack(filescan.FileScan):
 	    http://mnin.blogspot.com/2011/04/investigating-windows-threads-with.html
 	[4] Part 1: Processes, Threads, Fibers and Jobs (accessed 14/Oct/2011):
 	    http://www.alex-ionescu.com/BH08-AlexIonescu.pdf
+	[5] Windows Data Alignment on IPF, x86, and x64 (accessed 20/Mar/2013):
+			http://msdn.microsoft.com/en-us/library/aa290049(v=vs.71).aspx
 	"""
 
 	meta_info = dict(
@@ -381,12 +383,4 @@ class ExportStack(filescan.FileScan):
 		outfd.write("\n")
 
 	def carve_process_threads(self, outfd, eproc):
-		outfd.write("****************\n")
-		outfd.write("* User Threads *\n")
-		outfd.write("****************\n")
 		[ self.carve_thread(outfd, eproc, ethread) for ethread in eproc.ThreadListHead.list_of_type("_ETHREAD", "ThreadListEntry") ]
-		outfd.write("***************\n")
-		outfd.write("* GUI Threads *\n")
-		outfd.write("***************\n")
-		# Windows GUI threads are only visible within the processes address space (the System process, most likely, has no access!)
-		[ self.carve_thread(outfd, eproc, ethread.Tcb.Win32Thread.dereference_as("_W32THREAD").pEThread) for ethread in eproc.ThreadListHead.list_of_type('_ETHREAD', 'ThreadListEntry') if ethread.Tcb.Win32Thread.is_valid() and ethread.Tcb.Win32Thread.v() >= 0x80000000 ]
