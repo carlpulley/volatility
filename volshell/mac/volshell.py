@@ -33,7 +33,7 @@ class MacVolshell(volshell.BaseVolshell):
     return proc.p_pid
 
   def getPPid(self, proc):
-    return "FIXME"
+    return proc.p_pptr.p_pid
 
   def getImageName(self, proc):
     return proc.p_comm

@@ -33,7 +33,7 @@ class LinuxVolshell(volshell.BaseVolshell):
     return proc.pid
 
   def getPPid(self, proc):
-    return "FIXME"
+    return proc.p_pptr.pid
 
   def getImageName(self, proc):
     return proc.comm
