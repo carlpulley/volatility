@@ -1,148 +1,148 @@
-# Copyrigh   (C) 2010 Carl Pulley <c.j.pulley@hud.ac.uk>
+# Copyright (C) 2010 Carl Pulley <c.j.pulley@hud.ac.uk>
 #
-# This program is free sof  ware; you can redis  ribu  e i   and/or modify
-# i   under   he   erms of   he GNU General Public License as published by
-#   he Free Sof  ware Founda  ion; ei  her version 2 of   he License, or (a  
-# your op  ion) any la  er version.
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or (at
+# your option) any later version.
 #
-# This program is dis  ribu  ed in   he hope   ha   i   will be useful, bu  
-# WITHOUT ANY WARRANTY; wi  hou   even   he implied warran  y of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See   he GNU
-# General Public License for more de  ails. 
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details. 
 #
-# You should have received a copy of   he GNU General Public License
-# along wi  h   his program; if no  , wri  e   o   he Free Sof  ware
-# Founda  ion, Inc., 59 Temple Place, Sui  e 330, Bos  on, MA 02111-1307 USA 
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA 
 
 VOLATILITY PLUGINS
 ==================
 
-Honeyne   Plugins
+Honeynet Plugins
 ================
 
-The code for   he following plugins were originally wri    en for Challenge 3 of 
-  he Honeyne   Forensic Challenge 2010 (Banking Troubles - see h    ps://gi  hub.com/carlpulley/vola  ili  y/  ree/v1.3 
-and h    p://honeyne  .org/challenges/2010_3_banking_  roubles for more 
-informa  ion).
+The code for the following plugins were originally written for Challenge 3 of 
+the Honeynet Forensic Challenge 2010 (Banking Troubles - see https://github.com/carlpulley/volatility/tree/v1.3 
+and http://honeynet.org/challenges/2010_3_banking_troubles for more 
+information).
 
-  expor  file.py [DEPRECIATED: replaced by dumpfiles in 2.3] -   his plugin 
-  								implemen  s   he expor  ing and saving of _FILE_OBJECT's. In 
-  								addi  ion, file recons  ruc  ion func  ionali  y is offered by 
-  								  he plugin.
-  expor  s  ack.py -   his plugin displays informa  ion regarding an _EPROCESS'es 
-                    hread da  a s  ruc  ures.
+  exportfile.py [DEPRECIATED: replaced by dumpfiles in 2.3] - this plugin 
+  								implements the exporting and saving of _FILE_OBJECT's. In 
+  								addition, file reconstruction functionality is offered by 
+  								the plugin.
+  exportstack.py - this plugin displays information regarding an _EPROCESS'es 
+                  thread data structures.
 
-To ins  all   hese plugins simply include   hem (e.g. wi  h   he --plugins command 
-line op  ion), when running Vola  ili  y.
+To install these plugins simply include them (e.g. with the --plugins command 
+line option), when running Volatility.
 
-For documen  a  ion on using   hese plugins, please use   he Vola  ili  y --help 
-op  ion   o   he plugin command.
+For documentation on using these plugins, please use the Volatility --help 
+option to the plugin command.
 
-CURRENT LIMITATIONS: expor  file.py should work wi  h Vola  ili  y 2.0 whils   
-  expor  s  ack.py should work wi  h Vola  ili  y 2.0, 2.1, 2.2 and 2.3. 
+CURRENT LIMITATIONS: exportfile.py should work with Volatility 2.0 whilst 
+  exportstack.py should work with Volatility 2.0, 2.1, 2.2 and 2.3. 
 
-  The expor  s  ack.py plugin curren  ly genera  es ou  pu     ha   is erroneous (see 
-  h    ps://gi  hub.com/carlpulley/vola  ili  y/issues/10).
+  The exportstack.py plugin currently generates output that is erroneous (see 
+  https://github.com/carlpulley/volatility/issues/10).
 
-  These limi  a  ions will change in   he very near fu  ure.
+  These limitations will change in the very near future.
 
 
-PLUGIN SIMILARITIES: The expor  s  ack.py plugin has a number of similari  ies   o:
-  h    p://code.google.com/p/vola  ili  y/wiki/CommandReference#  hreads
-  expor  s  ack.py differs mainly in   he fac     ha   i   a    emp  s   o perform (user and 
-  kernel) s  ack unwinds, whils     hreads does no   curren  ly do   his. In addi  ion, 
-    hreads curren  ly displays a number of useful _ETHREAD members   ha   
-  expor  s  ack.py does no   and incorpora  es an excellen     ag based fil  ering sys  em.
+PLUGIN SIMILARITIES: The exportstack.py plugin has a number of similarities to:
+  http://code.google.com/p/volatility/wiki/CommandReference#threads
+  exportstack.py differs mainly in the fact that it attempts to perform (user and 
+  kernel) stack unwinds, whilst threads does not currently do this. In addition, 
+  threads currently displays a number of useful _ETHREAD members that 
+  exportstack.py does not and incorporates an excellent tag based filtering system.
 
-O  her Plugins
+Other Plugins
 =============
 
-  volshell.py -   his plugin is a reworking of   he exis  ing Vola  ili  y volshell
+  volshell.py - this plugin is a reworking of the existing Volatility volshell
   	plugin. Major changes are as follows:
-  		+ hh has been dele  ed. All help informa  ion is now available as Py  hon
-  		  documen  a  ion s  rings. For example, help(self) and dir(self) give general
-  		  command help, whils   help(<command>) provides help on a specific command.
-  		  TODO: when using   he IPy  hon command line promp  , __buil  in__.help curren  ly 
-  		    overwri  es   he defined help alias (  o self.help), so i   is necessary   o 
-  		    manually correc     his by en  ering 'help = self.help' af  er   he IPy  hon 
-  		    shell s  ar  s. Failing   o do   his means   ha   individual plugin help will
-  		    be limi  ed.
-  		+   he   ype of volshell ins  ance launched (i.e. WinVolshell, LinuxVolshell, 
-  		  MacVolshell, e  c.) is chosen using   he profile me  ada  a (specifically   he 
-  		  os a    ribu  e). When   he OS is unknown, a base Volshell is launched - so 
-  		  jus   load   he image and go!
-  		+ all Vola  ili  y plugins are po  en  ially available as commands. These are 
-  		  fil  ered using   he image's profile. Any plugin wi  hou   a render_  ex   is 
-  		  addi  ionally fil  ered ou  . Plugin commands can produce   hree   ypes of 
-  		  ou  pu  :
-  		  	* wi  h render=True,   he plugin prin  s   o s  dou  
-  		  	* wi  h render=False and   able_da  a=True,   he plugin hooks   he   able_header 
-  		  	  and   able_row me  hods and re  urns a lis   of hashes represen  ing   he 
-  		  	  displayed   abular da  a
-  		  	* wi  h render=False and   able_da  a=False,   he plugin re  urns   he plugin's 
-  		  	  calcula  e resul  .
-  		  Plugin argumen  s are scraped by hooking   he single  on class conf.ConfObjec   
-  		  and grabbing command line op  ions. These are used (af  er fil  ering ou   generic 
-  		  op  ions from commands.Command)   o genera  e valid keyword argumen  s wi  h 
-  		  defaul  s (if specified). Plugin commands are dynamically added   o   he Volshell 
+  		+ hh has been deleted. All help information is now available as Python
+  		  documentation strings. For example, help(self) and dir(self) give general
+  		  command help, whilst help(<command>) provides help on a specific command.
+  		  TODO: when using the IPython command line prompt, __builtin__.help currently 
+  		    overwrites the defined help alias (to self.help), so it is necessary to 
+  		    manually correct this by entering 'help = self.help' after the IPython 
+  		    shell starts. Failing to do this means that individual plugin help will
+  		    be limited.
+  		+ the type of volshell instance launched (i.e. WinVolshell, LinuxVolshell, 
+  		  MacVolshell, etc.) is chosen using the profile metadata (specifically the 
+  		  os attribute). When the OS is unknown, a base Volshell is launched - so 
+  		  just load the image and go!
+  		+ all Volatility plugins are potentially available as commands. These are 
+  		  filtered using the image's profile. Any plugin without a render_text is 
+  		  additionally filtered out. Plugin commands can produce three types of 
+  		  output:
+  		  	* with render=True, the plugin prints to stdout
+  		  	* with render=False and table_data=True, the plugin hooks the table_header 
+  		  	  and table_row methods and returns a list of hashes representing the 
+  		  	  displayed tabular data
+  		  	* with render=False and table_data=False, the plugin returns the plugin's 
+  		  	  calculate result.
+  		  Plugin arguments are scraped by hooking the singleton class conf.ConfObject 
+  		  and grabbing command line options. These are used (after filtering out generic 
+  		  options from commands.Command) to generate valid keyword arguments with 
+  		  defaults (if specified). Plugin commands are dynamically added to the Volshell 
   		  class and are accessed via self.<command>. For convenience, aliases are 
-  		  genera  ed using '<command> = self.<command>'.
-  		+ i   is now possible   o override exi  ing commands in BaseVolshell (e.g. see ps 
-  		  in WinVolshell, LinuxVolshell and MacVolshell) and   o add in commands   ha   
-  		  are OS specific (e.g. see WinVolshell for lis  _en  ry).
-  		+ a source command has been added   o ease loading Volshell scrip  s in  o   he 
-  		  curren   session. Any func  ion in   he loaded file ma  ching   he pa    ern:
+  		  generated using '<command> = self.<command>'.
+  		+ it is now possible to override exiting commands in BaseVolshell (e.g. see ps 
+  		  in WinVolshell, LinuxVolshell and MacVolshell) and to add in commands that 
+  		  are OS specific (e.g. see WinVolshell for list_entry).
+  		+ a source command has been added to ease loading Volshell scripts into the 
+  		  current session. Any function in the loaded file matching the pattern:
 
   				def func(self, ..):
   					..
 
-  			is blindly bound   o   he curren   Volshell ins  ance and made available as self.func(..) 
-  			or func(self, ..). If   his code was loca  ed in /pa  h/  o/func.py   hen i   can be sourced
-  			using   he Volshell command (for convenience, sys.pa  h is also searched):
+  			is blindly bound to the current Volshell instance and made available as self.func(..) 
+  			or func(self, ..). If this code was located in /path/to/func.py then it can be sourced
+  			using the Volshell command (for convenience, sys.path is also searched):
 
-  				source("/pa  h/  o/func.py")
+  				source("/path/to/func.py")
 
-  		  TODO: implemen   code   o assign 'func = self.func' in   he Volshell session.
-  		+ [EXPERIMENTAL] i   is possible   o use   he Volshell plugin in a Vola  ili  y as a library 
-  			like manner [1]. The following simple code demons  ra  es   he idea by prin  ing ou   a 
-  		  (sor  ed) process   ree:
+  		  TODO: implement code to assign 'func = self.func' in the Volshell session.
+  		+ [EXPERIMENTAL] it is possible to use the Volshell plugin in a Volatility as a library 
+  			like manner [1]. The following simple code demonstrates the idea by printing out a 
+  		  (sorted) process tree:
 
-  		    from vola  ili  y.plugins.volshell impor   Volshell
-  		  	from i  er  ools impor   groupby
+  		    from volatility.plugins.volshell import Volshell
+  		  	from itertools import groupby
 
   		    def analyse(mem_image):
   		    	shell = Volshell(filename=mem_image)
-  		    	da  a = groupby(sor  ed(shell.pslis  (), key=lambda x: x['PPID']), lambda x: x['PPID'])
-  		    	for ppid, pids in da  a:
-  		    		prin   "PPID: {0}".forma  (ppid)
+  		    	data = groupby(sorted(shell.pslist(), key=lambda x: x['PPID']), lambda x: x['PPID'])
+  		    	for ppid, pids in data:
+  		    		print "PPID: {0}".format(ppid)
   		    		for pid in pids:
-  		    			prin   "  PID: {0}".forma  (pid['PID'])
+  		    			print "  PID: {0}".format(pid['PID'])
 
-  		  In library mode,   he Volshell plugin rela  ed me  hods (i.e.   he help, calcula  e  
-  		  and render_* me  hods) are disabled.
-  		  TODO: genera  e examples demons  ra  ing   he po  en  ial uses for Volshell scrip   
+  		  In library mode, the Volshell plugin related methods (i.e. the help, calculate  
+  		  and render_* methods) are disabled.
+  		  TODO: generate examples demonstrating the potential uses for Volshell script 
   		  	and library code.
-  		+ [EXPERIMENTAL] based on [2] and [3],   here appears   o be a longer   erm preference 
-  			for IPy  hon being   he defaul   command line experience (+1 from myself!). So, when 
-  			we failover   o a basic Py  hon Volshell, an IPy  hon "nag" banner is displayed on 
-  			s  ar  up.
+  		+ [EXPERIMENTAL] based on [2] and [3], there appears to be a longer term preference 
+  			for IPython being the default command line experience (+1 from myself!). So, when 
+  			we failover to a basic Python Volshell, an IPython "nag" banner is displayed on 
+  			startup.
 
-  	INSTALLATION: run   he following commands   o ins  all (WARNING:   he exis  ing Volshell 
-  	  code is dele  ed):
+  	INSTALLATION: run the following commands to install (WARNING: the existing Volshell 
+  	  code is deleted):
 
-  			rm $VOLATILITY_SRC/vola  ili  y/plugins/linux/linux_volshell.py
-  			rm $VOLATILITY_SRC/vola  ili  y/plugins/mac/mac_volshell.py
-  			cp -f volshell/volshell.py $VOLATILITY_SRC/vola  ili  y/plugins/
-  			cp -fr volshell/linux $VOLATILITY_SRC/vola  ili  y/plugins/
-  			cp -fr volshell/mac $VOLATILITY_SRC/vola  ili  y/plugins/
-  			cp -fr volshell/windows $VOLATILITY_SRC/vola  ili  y/plugins/
+  			rm $VOLATILITY_SRC/volatility/plugins/linux/linux_volshell.py
+  			rm $VOLATILITY_SRC/volatility/plugins/mac/mac_volshell.py
+  			cp -f volshell/volshell.py $VOLATILITY_SRC/volatility/plugins/
+  			cp -fr volshell/linux $VOLATILITY_SRC/volatility/plugins/
+  			cp -fr volshell/mac $VOLATILITY_SRC/volatility/plugins/
+  			cp -fr volshell/windows $VOLATILITY_SRC/volatility/plugins/
 
 REFERENCES:
 ===========
 
-[1] Using Vola  ili  y as a Library (accessed 24/Mar/2  ):
-      h    ps://code.google.com/p/vola  ili  y/wiki/Vola  ili  yUsage23#Using_Vola  ili  y_as_a_Library
-[2] Vola  ili  y Roadmap: Vola  ili  y 3.0 (Official Tech Preview Merge) (accessed 24/Mar/2  ):
-      h    ps://code.google.com/p/vola  ili  y/wiki/Vola  ili  yRoadmap#Vola  ili  y_3.0_(Official_Tech_Preview_Merge)
-[3] Vola  ili  y Technology Preview Documen  a  ion: Tu  orial (accessed 24/Mar/2  ):
-      h    ps://vola  ili  y.googlecode.com/svn/branches/scude    e/docs/  u  orial.h  ml
+[1] Using Volatility as a Library (accessed 24/Mar/2013):
+      https://code.google.com/p/volatility/wiki/VolatilityUsage23#Using_Volatility_as_a_Library
+[2] Volatility Roadmap: Volatility 3.0 (Official Tech Preview Merge) (accessed 24/Mar/2013):
+      https://code.google.com/p/volatility/wiki/VolatilityRoadmap#Volatility_3.0_(Official_Tech_Preview_Merge)
+[3] Volatility Technology Preview Documentation: Tutorial (accessed 24/Mar/2013):
+      https://volatility.googlecode.com/svn/branches/scudette/docs/tutorial.html
