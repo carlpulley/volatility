@@ -111,6 +111,9 @@ class Plugin(object):
         self.table_data = []
         module_class.__init__(self, config, *_args, **_kwargs)
       
+      def format_value(self, value, fmt):
+        return value
+
       def table_header(self, outfd, title_format_list = None):
         self.table_title = [ title for title, spec in title_format_list ]
         module_class.table_header(self, outfd, title_format_list)
