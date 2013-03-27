@@ -90,15 +90,11 @@ class Plugin(object):
     config = Config()
     self.module(config)
     default_config = config.option_hook
+    plugin_options = default_config.keys() + ["render", "table_data"]
 
     config_arg = conf.ConfObject()
-    # conf.ConfObject is a singleton, so first we empty the readonly config 
-    # options (prior plugin execution could have polluted this area!)
-    set_options = config_arg.readonly.keys()
-    for key in set_options:
-      config_arg.remove_option(key)
     for key in kwargs:
-      if key not in default_config and key not in ["render", "table_data"]:
+      if key not in plugin_options:
         raise VolshellException("{0} is not a valid keyword argument".format(key))
       if key in self.base_config:
         raise VolshellException("{0} is not usable within volshell".format(key))
@@ -129,12 +125,19 @@ class Plugin(object):
     data = module.calculate()
     if "render" in kwargs and kwargs["render"]:
       module.render_text(sys.stdout, data)
+      result = None
     elif "table_data" in kwargs and kwargs["table_data"]:
       with open(os.devnull, 'w') as null:
         module.render_text(null, data)
-      return module.table_data
+      result = module.table_data
     else:
-      return data
+      result = data
+    # conf.ConfObject is a singleton, so first we remove any config 
+    # options we may have set
+    for key in plugin_options:
+      config_arg.remove_option(key)
+    return result
+
 
 class BaseVolshell(commands.Command):
   def __init__(self, config):
