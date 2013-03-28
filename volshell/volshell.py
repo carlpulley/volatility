@@ -135,7 +135,10 @@ class Plugin(object):
     # conf.ConfObject is a singleton, so first we remove any config 
     # options we may have set
     for key in plugin_options:
-      config_arg.remove_option(key)
+      try:
+        config_arg.remove_option(key)
+      except ValueError:
+        pass
     return result
 
 
