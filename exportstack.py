@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
 # exportfile.py
-# Copyright (C) 2010 Carl Pulley <c.j.pulley@hud.ac.uk>
+# Copyright (C) 2010, 2013 Carl Pulley <c.j.pulley@hud.ac.uk>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -30,347 +30,251 @@ This plugin displays information regarding an _EPROCESS'es thread data structure
 import re
 import os.path
 try:
-	import distorm3
-	distorm3_installed = True
+  import distorm3
+  distorm3_installed = True
 except ImportError:
-	distorm3_installed = False
+  distorm3_installed = False
 import volatility.utils as utils
 import volatility.obj as obj
 import volatility.win32.tasks as tasks
 import volatility.debug as debug
 import volatility.commands as commands
-import volatility.plugins.filescan as filescan
+import volatility.plugins.malware.threads as threads
 
-class ExportException(Exception):
-	"""General exception for handling warnings and errors during exporting of stacks"""
-	pass
+class ExportStack(threads.Threads):
+  """
+  This plugin is an extension of Michael Hale Ligh's threads plugin (see
+  http://code.google.com/p/volatility/wiki/CommandReference).
 
-class ExportStack(filescan.FileScan):
-	"""
-	Given a PID, _EPROCESS object (kernel address) or an _ETHREAD object 
-	(physical address), display information regarding the various stacks, 
-	registers, etc. for the processes threads.
-	
-	Stack unwinding functions by attempting to follow the EBP register entries 
-	in each stack frame. Unwinding occurs in both an upwards (i.e. stack 
-	decrementation on x86) and a downwards direction (i.e. stack 
-	incrementation on x86). The textual stack unwinding colours the current 
-	(i.e. ESP points into this frame) stack frame red. Stack frames above the 
-	red or current frame are located via a linear search for EBP chain 
-	candidates. Attempts are made to unwind both the user and kernel stacks.
-	
-	NB: This plugin has functionality overlaps with Michael Hale Ligh's threads 
-	plugin (see http://code.google.com/p/volatility/wiki/CommandReference).
-	
-	REFERENCES:
-	[1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
-	    Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro 
-	    Developer) 5th ed. Microsoft Press.
-	[2] Hewardt, M. & Pravat, D., 2007. Advanced Windows Debugging 1st ed. 
-	    Addison-Wesley Professional.
-	[3] Investigating Windows Threads with Volatility (accessed 13/Oct/2011):
-	    http://mnin.blogspot.com/2011/04/investigating-windows-threads-with.html
-	[4] Part 1: Processes, Threads, Fibers and Jobs (accessed 14/Oct/2011):
-	    http://www.alex-ionescu.com/BH08-AlexIonescu.pdf
-	[5] Windows Data Alignment on IPF, x86, and x64 (accessed 20/Mar/2013):
-			http://msdn.microsoft.com/en-us/library/aa290049(v=vs.71).aspx
-	"""
+  Given a PID or _EPROCESS object (kernel address), display information 
+  regarding the various stacks, registers, etc. for the processes threads.
+  
+  User/kernel stack unwinding functions by attempting to follow the EBP 
+  register entries in each stack frame. Unwinding occurs in both an upwards 
+  (i.e. stack decrementation on x86) and a downwards direction (i.e. stack 
+  incrementation on x86). Attempts are made to unwind: the user exception 
+  stack; and both the user and kernel stacks. 
 
-	meta_info = dict(
-		author = 'Carl Pulley',
-		copyright = 'Copyright (c) 2010 Carl Pulley',
-		contact = 'c.j.pulley@hud.ac.uk',
-		license = 'GNU General Public License 2.0 or later',
-		url = 'http://compeng.hud.ac.uk/scomcjp',
-		os = ['WinXPSP2x86', 'WinXPSP3x86'],
-		version = '1.0',
-		)
+  NOTE: FPO (Frame Pointer Optimisation) or similar techniques cause this 
+  code to produce unreliable stack unwinds.
+  
+  REFERENCES:
+  [1] Russinovich, M., Solomon, D.A. & Ionescu, A., 2009. Windows Internals: 
+      Including Windows Server 2008 and Windows Vista, Fifth Edition (Pro 
+      Developer) 5th ed. Microsoft Press.
+  [2] Hewardt, M. & Pravat, D., 2007. Advanced Windows Debugging 1st ed. 
+      Addison-Wesley Professional.
+  [3] Investigating Windows Threads with Volatility (accessed 13/Oct/2011):
+      http://mnin.blogspot.com/2011/04/investigating-windows-threads-with.html
+  [4] Part 1: Processes, Threads, Fibers and Jobs (accessed 14/Oct/2011):
+      http://www.alex-ionescu.com/BH08-AlexIonescu.pdf
+  [5] Windows Data Alignment on IPF, x86, and x64 (accessed 20/Mar/2013):
+      http://msdn.microsoft.com/en-us/library/aa290049(v=vs.71).aspx
+  [6] Grabbing Kernel Thread Call Stacks the Process Explorer Way (accessed 
+      20/Mar/2013):
+      http://blog.airesoft.co.uk/2009/02/grabbing-kernel-thread-contexts-the-process-explorer-way/
+  """
 
-	def __init__(self, config, *args):
-		filescan.FileScan.__init__(self, config, *args)
-		config.add_option("pid", type = 'int', action = 'store', help = "Export stack information using a given PID")
-		config.add_option("eproc", type = 'int', action = 'store', help = "Export stack information using an _EPROCESS offset (kernel address)")
-		config.add_option("ethrd", type = 'int', action = 'store', help = "Export stack information using an _ETHREAD offset (physical address)")
+  meta_info = dict(
+    author = 'Carl Pulley',
+    copyright = 'Copyright (c) 2010, 2013 Carl Pulley',
+    contact = 'c.j.pulley@hud.ac.uk',
+    license = 'GNU General Public License 2.0 or later',
+    url = 'http://compeng.hud.ac.uk/scomcjp',
+    os = ['WinXPSP2x86', 'WinXPSP3x86'],
+    version = '1.0',
+    )
 
-	def calculate(self):
-		self.kernel_address_space = utils.load_as(self._config)
-		self.flat_address_space = utils.load_as(self._config, astype = 'physical')
-		if not(bool(self._config.pid) ^ bool(self._config.eproc) ^ bool(self._config.ethrd)):
-			if not(bool(self._config.pid) or bool(self._config.eproc) or bool(self._config.eproc)):
-				debug.error("exactly *ONE* of the options --pid, --eproc or --ethrd must be specified (you have not specified _any_ of these options)")
-			else:
-				debug.error("exactly *ONE* of the options --pid, --eproc or --ethrd must be specified (you have used _multiple_ such options)")
-		if bool(self._config.pid):
-			# --pid
-			eproc_matches = [ eproc for eproc in tasks.pslist(self.kernel_address_space) if eproc.UniqueProcessId == self._config.pid ]
-			if len(eproc_matches) != 1:
-				debug.error("--pid needs to take a *VALID* PID argument (could not find PID {0} in the process listing for this memory image)".format(self._config.pid))
-			return [ eproc_matches[0] ]
-		elif bool(self._config.eproc):
-			# --eproc
-			eproc = obj.Object("_EPROCESS", offset = self._config.eproc, vm = self.kernel_address_space)
-			if eproc.is_valid():
-				return [ eproc ]
-			else:
-				debug.error("--eproc needs to take a *VALID* _EPROCESS kernel address (could not find a valid _EPROCESS 0x{0:08X} in this memory image)".format(self._config.eproc))
-		else:
-			# --ethrd
-			ethrd = obj.Object("_ETHREAD", offset = self._config.ethrd, vm = self.flat_address_space)
-			if ethrd.is_valid():
-				return [ ethrd ]
-			else:
-				debug.error("--ethrd needs to take a *VALID* _ETHREAD kernel address (could not find a valid _ETHREAD 0x{0:08X} in this memory image)".format(self._config.ethrd))
+  def render_text(self, outfd, data):
+    # Determine which filters the user wants to see
+    if self._config.FILTER:
+      filters = set(self._config.FILTER.split(','))
+    else:
+      filters = set()
 
-	def render_text(self, outfd, data):
-		if bool(self._config.ethrd):
-			for ethrd in data:
-				eproc = ethrd.ThreadsProcess
-				self.process_address_space = eproc.get_process_address_space()
-				self.carve_thread(outfd, eproc, ethrd)
-		else:
-			for eproc in data:
-				self.process_address_space = eproc.get_process_address_space()
-				self.carve_process_threads(outfd, eproc)
+    for thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range in data:
+      # If the user didn't set filters, display all results. If 
+      # the user set one or more filters, only show threads 
+      # with matching results. 
+      tags = set([t for t, v in instances.items() if v.check()])
 
-	highlight_colour_cursor = "\x1b[1;34;1m"
-	highlight_colour_frame = "\x1b[1;31;1m"
-	highlight_colour_end = "\x1b[0m"
-    
-	colour_stack = [highlight_colour_end]
+      if filters and not filters & tags:
+        continue
 
-	def get_stack_frames(self, start_ebp, stack_base, stack_limit, start_eip=None):
-		def stack_frame_iterator_up():
-			# Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
-			# TODO: need to build up a tree data structure here (there may have been multiple old calls that returned to the current frame)
-			ebp = start_ebp
-			ebp_ptr = start_ebp - 4
-			while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
-				# From [5], we assume an alignment for stack frames based on the memory model's bit size
-				alignment = 4 if self.kernel_address_space.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
-				if not self.process_address_space.is_valid_address(ebp_ptr):
-					ebp_ptr -= alignment
-				else:
-					ebp_value = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr))
-					if ebp_value == ebp:
-						ebp = ebp_ptr
-						eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp_ptr+4))
-						yield { 'eip':eip, 'ebp':ebp }
-						ebp_ptr -= 4
-					else:
-						ebp_ptr -= alignment
-		def stack_frame_iterator_down():
-			# Follow the EBP chain downloads and so locate stack frames
-			if start_eip != None:
-				yield { 'eip':start_eip, 'ebp':start_ebp }
-			ebp = start_ebp
-			while stack_base >= ebp and ebp > stack_limit:
-				if not self.process_address_space.is_valid_address(ebp):
-					return
-				eip = self.flat_address_space.read_long(self.process_address_space.vtop(ebp+4))
-				ebp = self.flat_address_space.read_long(self.process_address_space.vtop(ebp))
-				if ebp == 0x0:
-					return
-				yield { 'eip':eip, 'ebp':ebp }
-		old_stack_frames = [ frame for frame in stack_frame_iterator_up() ]
-		old_stack_frames.reverse()
-		current_stack_frames = [ frame for frame in stack_frame_iterator_down() ]
-		if current_stack_frames != []:
-			current_stack_frames[0]['highlight'] = True
-		return old_stack_frames + current_stack_frames
+      threads.Threads.render_text(self, outfd, [(thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range)])
+      self.carve_thread(outfd, thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range)
 
-	def add_vadentry(self, addr, vad_addr, storage):
-		StartingVpn = obj.Object('_MMVAD_LONG', offset = vad_addr, vm = self.process_address_space).StartingVpn
-		StartingVpn = StartingVpn << 12
-		EndingVpn = obj.Object('_MMVAD_LONG', offset = vad_addr, vm = self.process_address_space).EndingVpn
-		EndingVpn = ((EndingVpn+1) << 12) - 1
-		if StartingVpn <= addr and addr <= EndingVpn:
-			storage.append(vad_addr)
+  def get_stack_frames(self, addrspace, process_addrspace, start_ebp, stack_base, stack_limit, mode="user"):
+    alignment = 4 if addrspace.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
 
-	def disasm(self, outfd, addr, size, backwards=False, highlight=None):
-		if backwards:
-			size = (size/2)+1
-			addr = addr - size + 1
-		# TODO: add in code so we can correctly disassemble code backwards!
-		if addr < 0:
-			return
-		buf = self.process_address_space.read(addr, size)
-		offset = 0
-		while offset < size:
-			if self.process_address_space.is_valid_address(addr+offset):
-				instr = ""
-				instr_iter = distorm3.DecodeGenerator(addr+offset, buf[offset:], distorm3.Decode32Bits)
-				for i_off, i_sz, i_str, i_hex in instr_iter:
-					instr = i_str
-					instr_len = i_sz
-					break
-				if instr == "":
-					if addr+offset == highlight:
-						outfd.write("{0} => 0x{1:08X}{2}: ??\n".format(highlight_color_cursor, addr+offset, "".join(self.colour_stack)))
-					else:
-						outfd.write("    0x{0:08X}: ??\n".format(addr+offset))
-					offset += 1 
-				else:
-					if addr+offset == highlight:
-						outfd.write("{0} => 0x{1:08X}{2}: {3}\n".format(self.highlight_colour_cursor, addr+offset, "".join(self.colour_stack), instr))
-					else:
-						outfd.write("    0x{0:08X}: {1}\n".format(addr+offset, instr))
-					offset += instr_len
-			else:
-				if addr+offset == highlight:
-					outfd.write("{0} => 0x{1:08X}{2}: unreadable\n".format(self.highlight_colour_cursor, addr+offset, "".join(self.colour_stack)))
-				else:
-					outfd.write("    0x{0:08X}: unreadable\n".format(addr+offset))
-				offset += 4
+    def stack_frame_iterator_up():
+      # Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
+      ebp = start_ebp
+      # From [5], we assume an alignment for stack frames based on the memory model's bit size
+      ebp_ptr = start_ebp - alignment
+      ebp_bases = { ebp }
+      frame_number = 1
+      while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
+        if process_addrspace.is_valid_address(ebp_ptr):
+          ebp_value = process_addrspace.read_long_phys(process_addrspace.vtop(ebp_ptr))
+          if ebp_value in ebp_bases:
+            next_ebp = ebp_value
+            ebp = ebp_ptr
+            eip = process_addrspace.read_long_phys(process_addrspace.vtop(ebp_ptr + alignment))
+            yield { 'number': frame_number, 'eip': eip, 'ebp': ebp, 'next_ebp': next_ebp }
+            ebp_bases.add(ebp)
+            frame_number += 1
+        ebp_ptr -= alignment
+      raise StopIteration
+    def stack_frame_iterator_down():
+      # Follow the EBP chain downloads and so locate stack frames
+      frame_number = 0
+      ebp = start_ebp
+      while stack_base >= ebp and ebp > stack_limit:
+        if not process_addrspace.is_valid_address(ebp):
+          eip = None
+          yield { 'number': frame_number, 'eip': eip, 'ebp': ebp, 'next_ebp': None }
+          raise StopIteration
+        eip = process_addrspace.read_long_phys(process_addrspace.vtop(ebp + alignment))
+        next_ebp = process_addrspace.read_long_phys(process_addrspace.vtop(ebp))
+        yield { 'number': frame_number, 'eip': eip, 'ebp': ebp, 'next_ebp': next_ebp }
+        frame_number -= 1
+        ebp = next_ebp
+      raise StopIteration
 
-	def dump_stack_frame(self, outfd, address, length=0x80, width=16, title="Frame Dump", highlight=None, stack_type="user"):
-		if stack_type == "kernel":
-			address_space = self.kernel_address_space
-		else:
-			address_space = self.process_address_space
-		outfd.write("  {0}:\n".format(title))
-		if length % 4 != 0:
-			length = (length+4) - (length%4)
-		outfd.write("               +0 +1 +2 +3 +4 +5 +6 +7 +8 +9 +A +B +C +D +E +F\n")
-		FILTER=''.join([(len(repr(chr(x)))==3) and chr(x) or '.' for x in range(256)])
-		N=0
-		while N < length:
-			data = ' '.join([ "{0:02X}".format(ord(x)) if x else '??' for x in [ address_space.read(address+N+i, 1) if address_space.is_valid_address(address+N+i) else None for i in range(0, width) ] ])
-			hexa = ''.join([ x.translate(FILTER) if x else '.' for x in [ address_space.read(address+N+i, 1) if address_space.is_valid_address(address+N+i) else None for i in range(0, width) ] ])
-			if highlight == address+N:
-				outfd.write("{0} => 0x{1:08X}{2} {3:{width}} {4}\n".format(self.highlight_colour_cursor, address+N, "".join(self.colour_stack), data, hexa, width=width*3))
-			else:
-				outfd.write("    0x{0:08X} {1:{width}} {2}\n".format(address+N, data, hexa, width=width*3))
-			N += width
-		outfd.write("\n")
+    try:
+      for frame in stack_frame_iterator_up():
+        yield frame
+    except topIteration:
+      pass
+    for frame in stack_frame_iterator_down():
+      yield frame
+    raise StopIteration
 
-	def read_bitmap(self, bitmap, num):
-		return (bitmap >> num) & 1 == 1
+  def get_exception_frames(self, addrspace, process_addrspace, exn_start, stack_base, stack_limit):
+    alignment = 4 if addrspace.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
 
-	def get_kthread_state(self, state):
-		try:
-			return ["Initialized", "Ready", "Running", "Standby", "Terminated", "Waiting", "Transition", "DeferredReady", "GateWait"][state]
-		except:
-			return "0x{0:08X} is an unknown thread state!".format(state)
+    def exception_iterator_up():
+      frame_number = 1
+      exn_bases = { exn_start }
+      exn_ptr = exn_start - alignment
+      while stack_limit < exn_ptr and exn_ptr <= stack_base:
+        if process_addrspace.is_valid_address(exn_ptr):
+          exn = obj.Object('_EXCEPTION_REGISTRATION_RECORD', exn_ptr, process_addrspace)
+          if exn.Next in exn_bases:
+            yield { 'number': frame_number, 'exn': exn }
+            exn_bases.add(exn)
+            frame_number += 1
+        exn_ptr -= alignment
+      raise StopIteration
+    def exception_iterator_down():
+      frame_number = 0
+      exn = exn_start
+      while stack_limit < exn.v() and exn.v() <= stack_base:
+        if not process_addrspace.is_valid_address(exn.v()):
+          raise StopIteration
+        yield { 'number': frame_number, 'exn': exn }
+        frame_number -= 1
+        exn = exn.Next
+      raise StopIteration
 
-	def unwind_stack(self, outfd, stack_frames, stack_type="user"):
-		if stack_frames == []:
-			return
-		for frame in stack_frames:
-			if 'highlight' in frame:
-				outfd.write(self.highlight_colour_frame)
-				self.colour_stack.append(self.highlight_colour_frame)
-			outfd.write("  EIP: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, frame['eip'], "".join(self.colour_stack)))
-			outfd.write("  EBP: {0}0x{1:08X}{2}\n".format(self.highlight_colour_cursor, frame['ebp'], "".join(self.colour_stack)))
-			if frame['ebp'] >= 0x80:
-				self.dump_stack_frame(outfd, frame['ebp']-0x40, 0x8d, highlight=frame['ebp'], stack_type=stack_type)
-			if frame['eip'] > 0x20:
-				if distorm3_installed:
-					outfd.write("  Calling Code Dissassembly:\n")
-					self.disasm(outfd, frame['eip'], 0x40, backwards=True, highlight=frame['eip'])
-				else:
-					outfd.write("  WARNING: Skipping Code Dissassembly: distorm3 is not installed (see http://code.google.com/p/distorm/ for further information)\n")
-			if 'highlight' in frame:
-				self.colour_stack.pop()
-				outfd.write("\n".join(self.colour_stack))
-			outfd.write("-"*5)
-			outfd.write("\n")
+    try:
+      for frame in exception_iterator_up():
+        yield frame
+    except StopIteration:
+      pass
+    for frame in exception_iterator_down():
+      yield frame
+    raise StopIteration
 
-	def dump_trap_frame(self, outfd, trap_frame, title="User"):
-		outfd.write("\n")
-		outfd.write("  {0} Mode Registers:\n".format(title))
-		for reg, data_reg in [('Eip', 'Eip'), ('Esp', 'HardwareEsp'), ('Ebp', 'Ebp'), ('Err', 'ErrCode')]:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
-		outfd.write("\n")
-		for reg in ['Eax', 'Ebx', 'Ecx', 'Edx']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
-		outfd.write("\n")
-		for reg in ['Esi', 'Edi']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
-		outfd.write("\n")
-		for reg, data_reg in [('CS', 'SegCs'), ('SS', 'HardwareSegSs'), ('DS', 'SegDs'), ('ES', 'SegEs')]:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
-		outfd.write("\n")
-		for reg, data_reg in [('FS', 'SegFs'), ('GS', 'SegGs'), ('EFlags', 'EFlags')]:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(data_reg))))
-		outfd.write("\n")
-		for reg in ['Dr0', 'Dr1', 'Dr2', 'Dr3']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
-		outfd.write("\n")
-		for reg in ['Dr6', 'Dr7']:
-			outfd.write("    {0}: 0x{1:08X}".format(reg, eval("trap_frame.{0}".format(reg))))
-		outfd.write("\n")
-		return { 'eip':trap_frame.Eip, 'ebp':trap_frame.Ebp }
-		
-	# Copied from the Threads class in malware.py
-	def get_image_name(self, proc_offset):
-		"""Safely read a process's name, assuming it could be invalid"""
-		data = self.kernel_address_space.zread(proc_offset + self.kernel_address_space.profile.get_obj_offset("_EPROCESS", "ImageFileName"), 16)
-		if data:
-			if data.find("\x00") != -1:
-				data = data[:data.find("\x00")]
-			return repr(data)
-		return ""
+  def unwind_stack(self, outfd, addr_space, mods, mod_addrs, stack_frames):
+    self.table_header(outfd, [
+      ('Frame', '<15'),
+      ('EIP', '<15'),
+      ('Module', '<20'),
+      ('EBP (-> Chained Value)', '<')
+    ])
+    for frame in sorted(stack_frames, key=lambda f: f['number'], reverse=True):
+      if frame['number'] == 0:
+        frame_number = "current"
+      else:
+        frame_number = "current{0:+}".format(frame['number'])
+      if frame['eip'] is None:
+        eip_str = "-"*10
+        module_name = "-"
+      else:
+        eip_str = "{:#08x}".format(frame['eip'])
+        module = tasks.find_module(mods, mod_addrs, addr_space.address_mask(frame['eip']))
+        if module is not None:
+          module_name = str(module.BaseDllName or '-')
+        else:
+          module_name = "UNKNOWN"
+      ebp_str = "{:#08x}".format(frame['ebp']) if frame['ebp'] is not None else "-"*10
+      next_ebp_str = "{:#08x}".format(frame['next_ebp']) if frame['next_ebp'] is not None else "-"*10
+      self.table_row(outfd, frame_number, eip_str, module_name, "{0} (-> {1})".format(ebp_str, next_ebp_str))
 
-	def carve_thread(self, outfd, eproc, ethread):
-		outfd.write("*"*20)
-		outfd.write("\n")
-		outfd.write("Process ID: {0} [_EPROCESS @ 0x{1:08X}; {2}]\n".format(ethread.Cid.UniqueProcess, eproc.v(), self.get_image_name(eproc.v())))
-		if eproc.v() != ethread.Tcb.ApcState.Process.v():
-			outfd.write("  Attached to _EPROCESS: 0x{0:08X}\n".format(ethread.Tcb.ApcState.Process))
-		outfd.write("Thread ID: {0} [_ETHREAD @ 0x{1:08X}]\n".format(ethread.Cid.UniqueThread, ethread.v()))
-		outfd.write("  Created: {0}\n".format(ethread.CreateTime or "-"))
-		outfd.write("  Exited: {0}\n".format(ethread.ExitTime or "-"))
-		outfd.write("  Kernel Time: {0}\n".format(ethread.Tcb.KernelTime))
-		outfd.write("  User Time: {0}\n".format(ethread.Tcb.UserTime))
-		outfd.write("  State: {0}\n".format(self.get_kthread_state(ethread.Tcb.State)))
-		outfd.write("  TEB: 0x{0:08X}\n".format(ethread.Tcb.Teb))
-		if self.read_bitmap(ethread.CrossThreadFlags, 0):
-			outfd.write("  Terminated thread\n")
-		if self.read_bitmap(ethread.CrossThreadFlags, 1):
-			outfd.write("  Dead thread\n")
-		if self.read_bitmap(ethread.CrossThreadFlags, 2):
-			outfd.write("  Hide thread from debugger\n")
-		if self.read_bitmap(ethread.CrossThreadFlags, 4):
-			outfd.write("  System thread\n")
-		trap_frame = obj.Object('_KTRAP_FRAME', offset = ethread.Tcb.TrapFrame.v(), vm = self.kernel_address_space)
-		if trap_frame.is_valid():
-			top_frame = self.dump_trap_frame(outfd, trap_frame)
-		# FIXME: is this correct?
-		esp = trap_frame.HardwareEsp.v() if trap_frame.is_valid() else ethread.Tcb.KernelStack.v()
-		if esp >= 0x80000000:
-			outfd.write("\n  Currently Using the Kernel Stack\n\n")
-		else:
-			outfd.write("\n  Currently Using the User Stack\n\n")
-		kstack_base = ethread.Tcb.InitialStack.v()
-		kstack_limit = ethread.Tcb.StackLimit.v()
-		outfd.write("  Kernel Stack\n")
-		outfd.write("    Base: 0x{0:08X}\n".format(kstack_base))
-		outfd.write("    Limit: 0x{0:08X}\n".format(kstack_limit))
-		if self.kernel_address_space.is_valid_address(ethread.Tcb.KernelStack.v()):
-			outfd.write("Kernel Stack Unwind ==>\n")
-			self.unwind_stack(outfd, self.get_stack_frames(ethread.Tcb.KernelStack.v(), kstack_base, kstack_limit), stack_type="kernel")
-			outfd.write("<== End Kernel Stack Unwind\n")
-			outfd.write("\n")
-		teb = obj.Object('_TEB', offset = ethread.Tcb.Teb.v(), vm = self.process_address_space)
-		if teb.is_valid():
-			ustack_base = teb.NtTib.StackBase.v()
-			ustack_limit = teb.NtTib.StackLimit.v()
-			outfd.write("  User Stack\n")
-			outfd.write("    Base: 0x{0:08X}\n".format(ustack_base))
-			outfd.write("    Limit: 0x{0:08X}\n".format(ustack_limit))
-			if trap_frame.is_valid():
-				outfd.write("User Stack Unwind ==>\n")
-				self.unwind_stack(outfd, self.get_stack_frames(top_frame['ebp'], ustack_base, ustack_limit, top_frame['eip']), stack_type="user")
-				outfd.write("<== End User Stack Unwind\n")
-				outfd.write("\n")
-			else:
-				outfd.write("User Trap Frame is Invalid!\n")
-		else:
-			outfd.write("  TEB has been paged out!\n")
-		outfd.write("End Process ID: {0}\n".format(ethread.Cid.UniqueProcess.v()))
-		outfd.write("End Thread ID: {0}\n".format(ethread.Cid.UniqueThread.v()))
-		outfd.write("*"*20)
-		outfd.write("\n")
+  def unwind_exception_stack(self, outfd, addr_space, mods, mod_addrs, exception_frames):
+    self.table_header(outfd, [
+      ("Frame", '<15'),
+      ("Handler", "[addrpad]"),
+      ("Module", "<20"),
+      ("Address (-> Next)", "<30")
+    ])
+    for frame in sorted(exception_frames, key=lambda f: f['number'], reverse=True):
+      module = tasks.find_module(mods, mod_addrs, addr_space.address_mask(frame['exn'].Handler.v()))
+      if module is not None:
+        module_name = str(module.BaseDllName or '-')
+      else:
+        module_name = "UNKNOWN"
+      if frame['number'] == 0:
+        frame_number = "current"
+      else:
+        frame_number = "current{0:+}".format(frame['number'])
+      self.table_row(outfd, frame_number, frame['exn'].Handler.v(), module_name, "{0:#08x} (-> {1:#08x})".format(frame['exn'].v(), frame['exn'].Next.v()))
 
-	def carve_process_threads(self, outfd, eproc):
-		[ self.carve_thread(outfd, eproc, ethread) for ethread in eproc.ThreadListHead.list_of_type("_ETHREAD", "ThreadListEntry") ]
+  def carve_thread(self, outfd, thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range):
+    trap_frame = thread.Tcb.TrapFrame.dereference_as("_KTRAP_FRAME")
+    process_addrspace = thread.owning_process().get_process_address_space()
+
+    # FIXME: Bodge whilst we wait on issue #397 being fixed
+    mods = dict((addr_space.address_mask(mod.DllBase), mod) for mod in thread.owning_process().get_load_modules())
+    mod_addrs = sorted(mods.keys())
+
+    outfd.write("\n")
+    kstack_base = thread.Tcb.InitialStack.v()
+    kstack_limit = thread.Tcb.StackLimit.v()
+    outfd.write("Kernel Stack:\n")
+    outfd.write("  Range: {0:#08x}-{1:#08x}\n".format(kstack_limit, kstack_base))
+    outfd.write("  Size: {0:#x}\n".format(kstack_base - kstack_limit))
+    esp = thread.Tcb.KernelStack.v()
+    if process_addrspace.is_valid_address(esp+12):
+      outfd.write("<== Kernel Stack Unwind ==>\n")
+      # See [6] for how EBP is saved on the kernel stack and the reason for a magic value of 12
+      ebp = process_addrspace.read_long_phys(process_addrspace.vtop(esp+12))
+      self.unwind_stack(outfd, addr_space, mods, mod_addrs, self.get_stack_frames(addr_space, process_addrspace, ebp, kstack_base, kstack_limit, mode="kernel"))
+      outfd.write("<== End Kernel Stack Unwind ==>\n")
+
+    teb = obj.Object('_TEB', offset = thread.Tcb.Teb.v(), vm = process_addrspace)
+
+    outfd.write("\n")
+    if teb.is_valid():
+      ustack_base = teb.NtTib.StackBase.v()
+      ustack_limit = teb.NtTib.StackLimit.v()
+      outfd.write("User Stack:\n")
+      outfd.write("  Range: {0:#08x}-{1:#08x}\n".format(ustack_limit, ustack_base))
+      outfd.write("  Size: {0:#x}\n".format(ustack_base - ustack_limit))
+      if trap_frame.is_valid():
+        outfd.write("<== User Stack Unwind ==>\n")
+        self.unwind_stack(outfd, addr_space, mods, mod_addrs, self.get_stack_frames(addr_space, process_addrspace, trap_frame.Ebp, ustack_base, ustack_limit))
+        outfd.write("<== End User Stack Unwind ==>\n")
+
+        outfd.write("\n")
+        outfd.write("<== Exception Stack Unwind ==>\n")
+        teb = obj.Object('_TEB', thread.Tcb.Teb.v(), process_addrspace)
+        self.unwind_exception_stack(outfd, addr_space, mods, mod_addrs, self.get_exception_frames(addr_space, process_addrspace, teb.NtTib.ExceptionList, ustack_base, ustack_limit))
+        outfd.write("<== End Exception Stack Unwind ==>\n")
+      else:
+        outfd.write("User Trap Frame is Invalid\n")
+    else:
+      outfd.write("User Stack:\n")
+      outfd.write("  TEB has been paged out?\n")

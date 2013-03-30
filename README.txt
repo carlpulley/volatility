@@ -1,4 +1,4 @@
-# Copyright (C) 2010 Carl Pulley <c.j.pulley@hud.ac.uk>
+# Copyright (C) 2010, 2013 Carl Pulley <c.j.pulley@hud.ac.uk>
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,9 +25,9 @@ the Honeynet Forensic Challenge 2010 (Banking Troubles - see https://github.com/
 and http://honeynet.org/challenges/2010_3_banking_troubles for more 
 information).
 
-  exportfile.py [DEPRECIATED: replaced by dumpfiles in 2.3] - this plugin 
-                  implements the exporting and saving of _FILE_OBJECT's. In 
-                  addition, file reconstruction functionality is offered by 
+  exportfile.py [DEPRECIATED: replaced by dumpfiles in Volatility 2.3] - this 
+                  plugin implements the exporting and saving of _FILE_OBJECT's. 
+                  In addition, file reconstruction functionality is offered by 
                   the plugin.
   exportstack.py - this plugin displays information regarding an _EPROCESS'es 
                   thread data structures.
@@ -41,18 +41,6 @@ option to the plugin command.
 CURRENT LIMITATIONS: exportfile.py should work with Volatility 2.0 whilst 
   exportstack.py should work with Volatility 2.0, 2.1, 2.2 and 2.3. 
 
-  The exportstack.py plugin currently generates output that is erroneous (see 
-  https://github.com/carlpulley/volatility/issues/10).
-
-  These limitations will change in the very near future.
-
-
-PLUGIN SIMILARITIES: The exportstack.py plugin has a number of similarities to:
-  http://code.google.com/p/volatility/wiki/CommandReference#threads
-  exportstack.py differs mainly in the fact that it attempts to perform (user and 
-  kernel) stack unwinds, whilst threads does not currently do this. In addition, 
-  threads currently displays a number of useful _ETHREAD members that 
-  exportstack.py does not and incorporates an excellent tag based filtering system.
 
 Other Plugins
 =============
