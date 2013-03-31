@@ -236,7 +236,7 @@ class ExportStack(threads.Threads):
     trap_frame = thread.Tcb.TrapFrame.dereference_as("_KTRAP_FRAME")
     process_addrspace = thread.owning_process().get_process_address_space()
 
-    # FIXME: Bodge whilst we wait on issue #397 being fixed
+    # FIXME: Bodge whilst we wait on issue #397 being resolved?
     mods = dict((addr_space.address_mask(mod.DllBase), mod) for mod in thread.owning_process().get_load_modules())
     mod_addrs = sorted(mods.keys())
 
@@ -247,12 +247,14 @@ class ExportStack(threads.Threads):
     outfd.write("  Range: {0:#08x}-{1:#08x}\n".format(kstack_limit, kstack_base))
     outfd.write("  Size: {0:#x}\n".format(kstack_base - kstack_limit))
     esp = thread.Tcb.KernelStack.v()
-    if process_addrspace.is_valid_address(esp+12):
+    if thread.Tcb.KernelStackResident and process_addrspace.is_valid_address(esp+12):
       outfd.write("<== Kernel Stack Unwind ==>\n")
       # See [6] for how EBP is saved on the kernel stack and the reason for a magic value of 12
       ebp = process_addrspace.read_long_phys(process_addrspace.vtop(esp+12))
       self.unwind_stack(outfd, addr_space, mods, mod_addrs, self.get_stack_frames(addr_space, process_addrspace, ebp, kstack_base, kstack_limit, mode="kernel"))
       outfd.write("<== End Kernel Stack Unwind ==>\n")
+    elif not thread.Tcb.KernelStackResident:
+      outfd.write("Kernel stack is not resident\n")
 
     teb = obj.Object('_TEB', offset = thread.Tcb.Teb.v(), vm = process_addrspace)
 
