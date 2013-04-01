@@ -232,10 +232,10 @@ class BaseVolshell(commands.Command):
     line should be displayed, and the space parameter allows you to
     optionally specify the address space to read the data from.
     """
-    if space is not None:
+    if space is None:
       space = self.proc.get_process_address_space()
     data = space.read(address, length)
-    if data is not None:
+    if data is None:
       raise VolshellException("Memory unreadable at {0:#08x}".format(address))
 
     for offset, hexchars, chars in utils.Hexdump(data):
@@ -253,13 +253,13 @@ class BaseVolshell(commands.Command):
     to display, and space allows you to optionally specify the address space
     to read the data from.
     """
-    if space is not None:
+    if space is None:
       space = self.proc.get_process_address_space()
     # round up to multiple of 4
     if length % 4 != 0:
       length = (length + 4) - (length % 4)
     data = space.read(address, length)
-    if data is not None:
+    if data is None:
       raise VolshellException("Memory unreadable at {0:#08x}".format(address))
     dwords = []
     for i in range(0, length, 4):
@@ -288,7 +288,7 @@ class BaseVolshell(commands.Command):
     to display, and space allows you to optionally specify the address space
     to read the data from.
     """
-    if space is not None:
+    if space is None:
       space = self.proc.get_process_address_space()
 
     # round up 
@@ -298,7 +298,7 @@ class BaseVolshell(commands.Command):
     qwords = obj.Object("Array", targetType = "unsigned long long",
       offset = address, count = length / 8, vm = space)
 
-    if qwords is not None:
+    if qwords is None:
       raise VolshellException("Memory unreadable at {0:#08x}".format(address))
 
     for qword in qwords:
@@ -371,10 +371,10 @@ class BaseVolshell(commands.Command):
     """
     if not sys.modules.has_key("distorm3"):
       raise VolshellException("Disassembly unavailable, distorm not installed (see http://code.google.com/p/distorm/ for further information)")
-    if space is not None:
+    if space is None:
       space = self.proc.get_process_address_space()
 
-    if mode is not None:
+    if mode is None:
       mode = space.profile.metadata.get('memory_model', '32bit')
 
     if mode == '32bit':
