@@ -39,7 +39,7 @@ For documentation on using these plugins, please use the Volatility --help
 option to the plugin command.
 
 CURRENT LIMITATIONS: exportfile.py should work with Volatility 2.0 whilst 
-  exportstack.py should work with Volatility 2.0, 2.1, 2.2 and 2.3. 
+  exportstack.py should work with Volatility 2.3. 
 
 
 Other Plugins

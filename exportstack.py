@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# exportfile.py
+# exportstack.py
 # Copyright (C) 2010, 2013 Carl Pulley <c.j.pulley@hud.ac.uk>
 #
 # This program is free software; you can redistribute it and/or modify
@@ -27,18 +27,18 @@ This plugin displays information regarding an _EPROCESS'es thread data structure
 @organization: University of Huddersfield
 """
 
+from bisect import bisect_right
 import re
 import os.path
+import volatility.debug as debug
 try:
   import distorm3
   distorm3_installed = True
 except ImportError:
   distorm3_installed = False
-import volatility.utils as utils
+  debug.warning("Distorm3 is not installed - disassembly switched off")
 import volatility.obj as obj
-import volatility.win32.tasks as tasks
-import volatility.debug as debug
-import volatility.commands as commands
+import volatility.plugins.malware.impscan as impscan
 import volatility.plugins.malware.threads as threads
 
 class ExportStack(threads.Threads):
@@ -54,6 +54,9 @@ class ExportStack(threads.Threads):
   (i.e. stack decrementation on x86) and a downwards direction (i.e. stack 
   incrementation on x86). Attempts are made to unwind: the user exception 
   stack; and both the user and kernel stacks. 
+
+  EIP stack values are resolved to function names using the module export 
+  tables (these can sometimes resolve to function ordinals).
 
   NOTE: FPO (Frame Pointer Optimisation) or similar techniques cause this 
   code to produce unreliable stack unwinds.
@@ -92,7 +95,10 @@ class ExportStack(threads.Threads):
     else:
       filters = set()
 
-    for thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range in data:
+    # sym_lookup: dict[_EPROCESS, dict[int, (_LDR_DATA_TABLE_ENTRY, string)]]
+    sym_lookup = {}
+
+    for thread, addr_space, system_mods, system_mod_addrs, instances, hooked_tables, system_range, owner_name in data:
       # If the user didn't set filters, display all results. If 
       # the user set one or more filters, only show threads 
       # with matching results. 
@@ -101,8 +107,13 @@ class ExportStack(threads.Threads):
       if filters and not filters & tags:
         continue
 
-      threads.Threads.render_text(self, outfd, [(thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range)])
-      self.carve_thread(outfd, thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range)
+      pid = int(thread.owning_process().UniqueProcessId)
+      if pid not in sym_lookup:
+        user_mods = list(thread.owning_process().get_load_modules())
+        mods = user_mods + system_mods.values()
+        sym_lookup[pid] = impscan.ImpScan.enum_apis(mods)
+      threads.Threads.render_text(self, outfd, [(thread, addr_space, system_mods, system_mod_addrs, instances, hooked_tables, system_range, owner_name)])
+      self.carve_thread(outfd, sym_lookup[pid], thread, addr_space, mods)
 
   def get_stack_frames(self, addrspace, process_addrspace, start_ebp, stack_base, stack_limit, mode="user"):
     alignment = 4 if addrspace.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
@@ -187,12 +198,29 @@ class ExportStack(threads.Threads):
       yield frame
     raise StopIteration
 
-  def unwind_stack(self, outfd, addr_space, mods, mod_addrs, stack_frames):
+  # TODO: add in code to extract function names from function ordinals using pdbparse
+  # TODO: add in code to check export names against those obtained using pdbparse
+  def lookup(self, sym_table, addr):
+    func_start_addrs = sorted(sym_table.keys())
+    idx = bisect_right(func_start_addrs, addr) - 1
+    func_start = func_start_addrs[idx] # func_start <= addr
+    mod, func = sym_table[func_start]
+    func_end = min(func_start_addrs[idx+1], mod.DllBase + mod.SizeOfImage)
+    diff = addr - func_start
+    if 0 < func_start and addr < func_end:
+      if diff > 0:
+        return "{0}!{1}+{2:#x}".format(mod.BaseDllName, func, diff)
+      else:
+        return "{0}!{1}".format(mod.BaseDllName, func)
+    else:
+      return "UNKNOWN"
+
+  def unwind_stack(self, outfd, sym_table, addr_space, mods, stack_frames):
     self.table_header(outfd, [
       ('Frame', '<15'),
+      ('EBP (-> Chained Value)', '<30'),
       ('EIP', '<15'),
-      ('Module', '<20'),
-      ('EBP (-> Chained Value)', '<')
+      ('Module', '<')
     ])
     for frame in sorted(stack_frames, key=lambda f: f['number'], reverse=True):
       if frame['number'] == 0:
@@ -204,41 +232,29 @@ class ExportStack(threads.Threads):
         module_name = "-"
       else:
         eip_str = "{:#08x}".format(frame['eip'])
-        module = tasks.find_module(mods, mod_addrs, addr_space.address_mask(frame['eip']))
-        if module is not None:
-          module_name = str(module.BaseDllName or '-')
-        else:
-          module_name = "UNKNOWN"
+        module_name = self.lookup(sym_table, frame['eip'])
       ebp_str = "{:#08x}".format(frame['ebp']) if frame['ebp'] is not None else "-"*10
       next_ebp_str = "{:#08x}".format(frame['next_ebp']) if frame['next_ebp'] is not None else "-"*10
-      self.table_row(outfd, frame_number, eip_str, module_name, "{0} (-> {1})".format(ebp_str, next_ebp_str))
+      self.table_row(outfd, frame_number, "{0} (-> {1})".format(ebp_str, next_ebp_str), eip_str, module_name)
 
-  def unwind_exception_stack(self, outfd, addr_space, mods, mod_addrs, exception_frames):
+  def unwind_exception_stack(self, outfd, sym_table, addr_space, mods, exception_frames):
     self.table_header(outfd, [
       ("Frame", '<15'),
+      ("Address (-> Next)", "<30"),
       ("Handler", "[addrpad]"),
-      ("Module", "<20"),
-      ("Address (-> Next)", "<30")
+      ("Module", "<")
     ])
     for frame in sorted(exception_frames, key=lambda f: f['number'], reverse=True):
-      module = tasks.find_module(mods, mod_addrs, addr_space.address_mask(frame['exn'].Handler.v()))
-      if module is not None:
-        module_name = str(module.BaseDllName or '-')
-      else:
-        module_name = "UNKNOWN"
+      module_name = self.lookup(sym_table, frame['exn'].Handler.v())
       if frame['number'] == 0:
         frame_number = "current"
       else:
         frame_number = "current{0:+}".format(frame['number'])
-      self.table_row(outfd, frame_number, frame['exn'].Handler.v(), module_name, "{0:#08x} (-> {1:#08x})".format(frame['exn'].v(), frame['exn'].Next.v()))
+      self.table_row(outfd, frame_number, "{0:#08x} (-> {1:#08x})".format(frame['exn'].v(), frame['exn'].Next.v()), frame['exn'].Handler.v(), module_name)
 
-  def carve_thread(self, outfd, thread, addr_space, mods, mod_addrs, instances, hooked_tables, system_range):
+  def carve_thread(self, outfd, sym_table, thread, addr_space, mods):
     trap_frame = thread.Tcb.TrapFrame.dereference_as("_KTRAP_FRAME")
     process_addrspace = thread.owning_process().get_process_address_space()
-
-    # FIXME: Bodge whilst we wait on issue #397 being resolved?
-    mods = dict((addr_space.address_mask(mod.DllBase), mod) for mod in thread.owning_process().get_load_modules())
-    mod_addrs = sorted(mods.keys())
 
     outfd.write("\n")
     kstack_base = thread.Tcb.InitialStack.v()
@@ -247,11 +263,11 @@ class ExportStack(threads.Threads):
     outfd.write("  Range: {0:#08x}-{1:#08x}\n".format(kstack_limit, kstack_base))
     outfd.write("  Size: {0:#x}\n".format(kstack_base - kstack_limit))
     esp = thread.Tcb.KernelStack.v()
-    if thread.Tcb.KernelStackResident and process_addrspace.is_valid_address(esp+12):
+    if thread.Tcb.KernelStackResident and process_addrspace.is_valid_address(esp+12) and kstack_limit < kstack_base:
       outfd.write("<== Kernel Stack Unwind ==>\n")
       # See [6] for how EBP is saved on the kernel stack and the reason for a magic value of 12
       ebp = process_addrspace.read_long_phys(process_addrspace.vtop(esp+12))
-      self.unwind_stack(outfd, addr_space, mods, mod_addrs, self.get_stack_frames(addr_space, process_addrspace, ebp, kstack_base, kstack_limit, mode="kernel"))
+      self.unwind_stack(outfd, sym_table, addr_space, mods, self.get_stack_frames(addr_space, process_addrspace, ebp, kstack_base, kstack_limit, mode="kernel"))
       outfd.write("<== End Kernel Stack Unwind ==>\n")
     elif not thread.Tcb.KernelStackResident:
       outfd.write("Kernel stack is not resident\n")
@@ -265,17 +281,17 @@ class ExportStack(threads.Threads):
       outfd.write("User Stack:\n")
       outfd.write("  Range: {0:#08x}-{1:#08x}\n".format(ustack_limit, ustack_base))
       outfd.write("  Size: {0:#x}\n".format(ustack_base - ustack_limit))
-      if trap_frame.is_valid():
+      if trap_frame.is_valid() and ustack_limit < ustack_base:
         outfd.write("<== User Stack Unwind ==>\n")
-        self.unwind_stack(outfd, addr_space, mods, mod_addrs, self.get_stack_frames(addr_space, process_addrspace, trap_frame.Ebp, ustack_base, ustack_limit))
+        self.unwind_stack(outfd, sym_table, addr_space, mods, self.get_stack_frames(addr_space, process_addrspace, trap_frame.Ebp, ustack_base, ustack_limit))
         outfd.write("<== End User Stack Unwind ==>\n")
 
         outfd.write("\n")
         outfd.write("<== Exception Stack Unwind ==>\n")
         teb = obj.Object('_TEB', thread.Tcb.Teb.v(), process_addrspace)
-        self.unwind_exception_stack(outfd, addr_space, mods, mod_addrs, self.get_exception_frames(addr_space, process_addrspace, teb.NtTib.ExceptionList, ustack_base, ustack_limit))
+        self.unwind_exception_stack(outfd, sym_table, addr_space, mods, self.get_exception_frames(addr_space, process_addrspace, teb.NtTib.ExceptionList, ustack_base, ustack_limit))
         outfd.write("<== End Exception Stack Unwind ==>\n")
-      else:
+      elif not trap_frame.is_valid():
         outfd.write("User Trap Frame is Invalid\n")
     else:
       outfd.write("User Stack:\n")
