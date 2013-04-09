@@ -27,6 +27,8 @@ This plugin displays information regarding an _EPROCESS'es thread data structure
 @organization: University of Huddersfield
 """
 
+# TODO: recover stack frames by searching for instruction patterns (e.g. CALL, etc.)
+
 from bisect import bisect_right
 import re
 import os.path
@@ -40,6 +42,102 @@ except ImportError:
 import volatility.obj as obj
 import volatility.plugins.malware.impscan as impscan
 import volatility.plugins.malware.threads as threads
+import volatility.win32.tasks as tasks
+
+class StackFrame(object):
+  """Abstract class that represents a stack frame within a given process address space"""
+  def __init__(self, stack_base, stack_limit, addrspace):
+    self.stack_base = stack_base
+    self.stack_limit = stack_limit
+    self.addrspace = addrspace
+    self.alignment = 4 if self.addrspace.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
+
+  def up(self):
+    """Stack iterator that retrieves stack frames above this one"""
+    raise StopIteration
+
+  def down(self):
+    """Stack iterator that retrieves stack frames below this one"""
+    raise StopIteration
+
+  def get_frames(self):
+    frames_up = list(enumerate(self.up(), start=1))
+    frames_down = list(enumerate(self.down(), start=1))
+    return list(reversed(frames_up)) + [(0, self)] + [ (-n, f) for n, f in frames_down ]
+
+class EBPFrame(StackFrame):
+  """Represents an EBP/EIP stack frame"""
+  def __init__(self, ebp, *args, **kwargs):
+    StackFrame.__init__(self, *args, **kwargs)
+    self.ebp = ebp
+    if self.addrspace.is_valid_address(self.ebp):
+      self.next_ebp = self.addrspace.read_long_phys(self.addrspace.vtop(self.ebp))
+    else:
+      self.next_ebp = obj.NoneObject("Invalid stack frame address: EBP={0:#x}".format(self.ebp))
+    if self.addrspace.is_valid_address(self.ebp + self.alignment):
+      self.eip = self.addrspace.read_long_phys(self.addrspace.vtop(self.ebp + self.alignment))
+    else:
+      self.eip = obj.NoneObject("Invalid stack frame address: EBP{1:+#x}={0:#x}".format(self.ebp + self.alignment, self.alignment))
+
+  def up(self):
+    # Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
+    frame = self
+    # From [5], we assume an alignment for stack frames based on the memory model's bit size
+    ebp_ptr = frame.ebp - self.alignment
+    ebp_bases = { frame.ebp }
+    while self.stack_limit < ebp_ptr and ebp_ptr <= self.stack_base:
+      if self.addrspace.is_valid_address(ebp_ptr):
+        ebp_value = self.addrspace.read_long_phys(self.addrspace.vtop(ebp_ptr))
+        if ebp_value in ebp_bases:
+          frame = EBPFrame(ebp_ptr, self.stack_base, self.stack_limit, self.addrspace)
+          yield frame
+          ebp_bases.add(frame.ebp)
+      ebp_ptr -= self.alignment
+    raise StopIteration
+
+  def down(self):
+    # Follow the EBP chain downloads and so locate stack frames
+    frame = self
+    while self.stack_limit < frame.next_ebp and frame.next_ebp <= self.stack_base:
+      if not self.addrspace.is_valid_address(frame.next_ebp):
+        raise StopIteration
+      frame = EBPFrame(frame.next_ebp, self.stack_base, self.stack_limit, self.addrspace)
+      yield frame
+    raise StopIteration
+
+class ExceptionFrame(StackFrame):
+  """Represents an exception stack frame (i.e. _EXCEPTION_REGISTRATION_RECORD)"""
+  def __init__(self, exn, *args, **kwargs):
+    StackFrame.__init__(self, *args, **kwargs)
+    if self.addrspace.is_valid_address(exn):
+      self.exn = obj.Object('_EXCEPTION_REGISTRATION_RECORD', exn, self.addrspace)
+    else:
+      self.exn = obj.NoneObject("Invalid exception frame address: {0:#x}".format(exn))
+
+  def up(self):
+    # Perform a linear search looking for potential (old) _EXCEPTION_REGISTRATION_RECORD Next values in remnants of old exception frames
+    frame = self
+    exn_ptr = self.exn.v() - self.alignment
+    exn_bases = { frame.exn.v() }
+    while self.stack_limit < exn_ptr and exn_ptr <= self.stack_base:
+      if self.addrspace.is_valid_address(exn_ptr):
+        exn = obj.Object('_EXCEPTION_REGISTRATION_RECORD', exn_ptr, self.addrspace)
+        if exn.Next.v() in exn_bases:
+          frame = ExceptionFrame(exn.v(), self.stack_base, self.stack_limit, self.addrspace)
+          yield frame
+          exn_bases.add(frame.exn.v())
+      exn_ptr -= self.alignment
+    raise StopIteration
+
+  def down(self):
+    # Follow _EXCEPTION_REGISTRATION_RECORD Next pointers and so locate exception frames
+    frame = self
+    while self.stack_limit < frame.exn.Next and frame.exn.Next <= self.stack_base:
+      if not self.addrspace.is_valid_address(frame.exn.Next):
+        raise StopIteration
+      frame = ExceptionFrame(frame.exn.Next, self.stack_base, self.stack_limit, self.addrspace)
+      yield frame
+    raise StopIteration
 
 class ExportStack(threads.Threads):
   """
@@ -55,8 +153,7 @@ class ExportStack(threads.Threads):
   incrementation on x86). Attempts are made to unwind: the user exception 
   stack; and both the user and kernel stacks. 
 
-  EIP stack values are resolved to function names using the module export 
-  tables (these can sometimes resolve to function ordinals).
+  EIP stack values are resolved to function names using symbols.Lookup.
 
   NOTE: FPO (Frame Pointer Optimisation) or similar techniques cause this 
   code to produce unreliable stack unwinds.
@@ -95,8 +192,9 @@ class ExportStack(threads.Threads):
     else:
       filters = set()
 
-    # sym_lookup: dict[_EPROCESS, dict[int, (_LDR_DATA_TABLE_ENTRY, string)]]
+    # sym_lookup: dict[int, symbols.Lookup]
     sym_lookup = {}
+    kernel_start = None
 
     for thread, addr_space, system_mods, system_mod_addrs, instances, hooked_tables, system_range, owner_name in data:
       # If the user didn't set filters, display all results. If 
@@ -107,96 +205,17 @@ class ExportStack(threads.Threads):
       if filters and not filters & tags:
         continue
 
+      if kernel_start is None:
+        kdbg = tasks.get_kdbg(addr_space)
+        kernel_start = kdbg.MmSystemRangeStart.dereference_as("Pointer")
+
       pid = int(thread.owning_process().UniqueProcessId)
       if pid not in sym_lookup:
         user_mods = list(thread.owning_process().get_load_modules())
         mods = user_mods + system_mods.values()
         sym_lookup[pid] = impscan.ImpScan.enum_apis(mods)
       threads.Threads.render_text(self, outfd, [(thread, addr_space, system_mods, system_mod_addrs, instances, hooked_tables, system_range, owner_name)])
-      self.carve_thread(outfd, sym_lookup[pid], thread, addr_space, mods)
-
-  def get_stack_frames(self, addrspace, process_addrspace, start_ebp, stack_base, stack_limit, mode="user"):
-    alignment = 4 if addrspace.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
-
-    def stack_frame_iterator_up():
-      # Perform a linear search looking for potential (old) EBP chain values in remnants of old stack frames
-      ebp = start_ebp
-      # From [5], we assume an alignment for stack frames based on the memory model's bit size
-      ebp_ptr = start_ebp - alignment
-      ebp_bases = { ebp }
-      frame_number = 1
-      while stack_limit < ebp_ptr and ebp_ptr <= stack_base:
-        if process_addrspace.is_valid_address(ebp_ptr):
-          ebp_value = process_addrspace.read_long_phys(process_addrspace.vtop(ebp_ptr))
-          if ebp_value in ebp_bases:
-            next_ebp = ebp_value
-            ebp = ebp_ptr
-            eip = process_addrspace.read_long_phys(process_addrspace.vtop(ebp_ptr + alignment))
-            yield { 'number': frame_number, 'eip': eip, 'ebp': ebp, 'next_ebp': next_ebp }
-            ebp_bases.add(ebp)
-            frame_number += 1
-        ebp_ptr -= alignment
-      raise StopIteration
-    def stack_frame_iterator_down():
-      # Follow the EBP chain downloads and so locate stack frames
-      frame_number = 0
-      ebp = start_ebp
-      while stack_base >= ebp and ebp > stack_limit:
-        if not process_addrspace.is_valid_address(ebp):
-          eip = None
-          yield { 'number': frame_number, 'eip': eip, 'ebp': ebp, 'next_ebp': None }
-          raise StopIteration
-        eip = process_addrspace.read_long_phys(process_addrspace.vtop(ebp + alignment))
-        next_ebp = process_addrspace.read_long_phys(process_addrspace.vtop(ebp))
-        yield { 'number': frame_number, 'eip': eip, 'ebp': ebp, 'next_ebp': next_ebp }
-        frame_number -= 1
-        ebp = next_ebp
-      raise StopIteration
-
-    try:
-      for frame in stack_frame_iterator_up():
-        yield frame
-    except topIteration:
-      pass
-    for frame in stack_frame_iterator_down():
-      yield frame
-    raise StopIteration
-
-  def get_exception_frames(self, addrspace, process_addrspace, exn_start, stack_base, stack_limit):
-    alignment = 4 if addrspace.profile.metadata.get('memory_model', '32bit') == '32bit' else 16
-
-    def exception_iterator_up():
-      frame_number = 1
-      exn_bases = { exn_start }
-      exn_ptr = exn_start - alignment
-      while stack_limit < exn_ptr and exn_ptr <= stack_base:
-        if process_addrspace.is_valid_address(exn_ptr):
-          exn = obj.Object('_EXCEPTION_REGISTRATION_RECORD', exn_ptr, process_addrspace)
-          if exn.Next in exn_bases:
-            yield { 'number': frame_number, 'exn': exn }
-            exn_bases.add(exn)
-            frame_number += 1
-        exn_ptr -= alignment
-      raise StopIteration
-    def exception_iterator_down():
-      frame_number = 0
-      exn = exn_start
-      while stack_limit < exn.v() and exn.v() <= stack_base:
-        if not process_addrspace.is_valid_address(exn.v()):
-          raise StopIteration
-        yield { 'number': frame_number, 'exn': exn }
-        frame_number -= 1
-        exn = exn.Next
-      raise StopIteration
-
-    try:
-      for frame in exception_iterator_up():
-        yield frame
-    except StopIteration:
-      pass
-    for frame in exception_iterator_down():
-      yield frame
-    raise StopIteration
+      self.carve_thread(outfd, sym_lookup[pid], thread, kernel_start)
 
   # TODO: add in code to extract function names from function ordinals using pdbparse
   # TODO: add in code to check export names against those obtained using pdbparse
@@ -215,46 +234,51 @@ class ExportStack(threads.Threads):
     else:
       return "UNKNOWN"
 
-  def unwind_stack(self, outfd, sym_table, addr_space, mods, stack_frames):
+  def unwind_stack(self, outfd, sym_table, stack_frames):
     self.table_header(outfd, [
       ('Frame', '<15'),
-      ('EBP (-> Chained Value)', '<30'),
-      ('EIP', '<15'),
-      ('Module', '<')
-    ])
-    for frame in sorted(stack_frames, key=lambda f: f['number'], reverse=True):
-      if frame['number'] == 0:
-        frame_number = "current"
-      else:
-        frame_number = "current{0:+}".format(frame['number'])
-      if frame['eip'] is None:
-        eip_str = "-"*10
-        module_name = "-"
-      else:
-        eip_str = "{:#08x}".format(frame['eip'])
-        module_name = self.lookup(sym_table, frame['eip'])
-      ebp_str = "{:#08x}".format(frame['ebp']) if frame['ebp'] is not None else "-"*10
-      next_ebp_str = "{:#08x}".format(frame['next_ebp']) if frame['next_ebp'] is not None else "-"*10
-      self.table_row(outfd, frame_number, "{0} (-> {1})".format(ebp_str, next_ebp_str), eip_str, module_name)
-
-  def unwind_exception_stack(self, outfd, sym_table, addr_space, mods, exception_frames):
-    self.table_header(outfd, [
-      ("Frame", '<15'),
-      ("Address (-> Next)", "<30"),
-      ("Handler", "[addrpad]"),
+      ('EBP (-> Chained Value)', '<32'),
+      ('EIP', '<16'),
       ("Module", "<")
     ])
-    for frame in sorted(exception_frames, key=lambda f: f['number'], reverse=True):
-      module_name = self.lookup(sym_table, frame['exn'].Handler.v())
-      if frame['number'] == 0:
+    for number, frame in stack_frames:
+      if number == 0:
         frame_number = "current"
       else:
-        frame_number = "current{0:+}".format(frame['number'])
-      self.table_row(outfd, frame_number, "{0:#08x} (-> {1:#08x})".format(frame['exn'].v(), frame['exn'].Next.v()), frame['exn'].Handler.v(), module_name)
+        frame_number = "current{0:+}".format(number)
+      if isinstance(frame.eip, obj.NoneObject):
+        eip_str = "-"*10
+      else:
+        eip_str = "{:#010x}".format(frame.eip)
+      module_name = self.lookup(sym_table, frame.eip)
+      ebp_str = "{:#010x}".format(frame.ebp) if not isinstance(frame.ebp, obj.NoneObject) else "-"*10
+      next_ebp_str = "{:#010x}".format(frame.next_ebp) if not isinstance(frame.next_ebp, obj.NoneObject) else "-"*10
+      self.table_row(outfd, frame_number, "{0} (-> {1})".format(ebp_str, next_ebp_str), eip_str, module_name)
 
-  def carve_thread(self, outfd, sym_table, thread, addr_space, mods):
+  def unwind_exception_stack(self, outfd, sym_table, exception_frames):
+    self.table_header(outfd, [
+      ("Frame", '<15'),
+      ("Address (-> Next)", "<32"),
+      ("Handler", "<16"),
+      ("Module", "<")
+    ])
+    for number, frame in exception_frames:
+      module_name = self.lookup(sym_table, frame.exn.Handler.v()) if not isinstance(frame.exn, obj.NoneObject) else "-"
+      if number == 0:
+        frame_number = "current"
+      else:
+        frame_number = "current{0:+}".format(number)
+      address_str = "{0:#010x} (-> {1:#010x})".format(frame.exn.v(), frame.exn.Next.v()) if not isinstance(frame.exn, obj.NoneObject) else "-"
+      handler_str = "{0:#010x}".format(frame.exn.Handler.v()) if not isinstance(frame.exn, obj.NoneObject) else "-"
+      self.table_row(outfd, frame_number, address_str, handler_str, module_name)
+
+  def carve_thread(self, outfd, sym_table, thread, kernel_start):
     trap_frame = thread.Tcb.TrapFrame.dereference_as("_KTRAP_FRAME")
     process_addrspace = thread.owning_process().get_process_address_space()
+
+    outfd.write("\n")
+
+    outfd.write("Kernel Start Address: {0:#010x}\n".format(kernel_start))
 
     outfd.write("\n")
     kstack_base = thread.Tcb.InitialStack.v()
@@ -267,7 +291,7 @@ class ExportStack(threads.Threads):
       outfd.write("<== Kernel Stack Unwind ==>\n")
       # See [6] for how EBP is saved on the kernel stack and the reason for a magic value of 12
       ebp = process_addrspace.read_long_phys(process_addrspace.vtop(esp+12))
-      self.unwind_stack(outfd, sym_table, addr_space, mods, self.get_stack_frames(addr_space, process_addrspace, ebp, kstack_base, kstack_limit, mode="kernel"))
+      self.unwind_stack(outfd, sym_table, EBPFrame(ebp, kstack_base, kstack_limit, process_addrspace).get_frames())
       outfd.write("<== End Kernel Stack Unwind ==>\n")
     elif not thread.Tcb.KernelStackResident:
       outfd.write("Kernel stack is not resident\n")
@@ -283,13 +307,13 @@ class ExportStack(threads.Threads):
       outfd.write("  Size: {0:#x}\n".format(ustack_base - ustack_limit))
       if trap_frame.is_valid() and ustack_limit < ustack_base:
         outfd.write("<== User Stack Unwind ==>\n")
-        self.unwind_stack(outfd, sym_table, addr_space, mods, self.get_stack_frames(addr_space, process_addrspace, trap_frame.Ebp, ustack_base, ustack_limit))
+        self.unwind_stack(outfd, sym_table, EBPFrame(trap_frame.Ebp, ustack_base, ustack_limit, process_addrspace).get_frames())
         outfd.write("<== End User Stack Unwind ==>\n")
 
         outfd.write("\n")
         outfd.write("<== Exception Stack Unwind ==>\n")
         teb = obj.Object('_TEB', thread.Tcb.Teb.v(), process_addrspace)
-        self.unwind_exception_stack(outfd, sym_table, addr_space, mods, self.get_exception_frames(addr_space, process_addrspace, teb.NtTib.ExceptionList, ustack_base, ustack_limit))
+        self.unwind_exception_stack(outfd, sym_table, ExceptionFrame(teb.NtTib.ExceptionList, ustack_base, ustack_limit, process_addrspace).get_frames())
         outfd.write("<== End Exception Stack Unwind ==>\n")
       elif not trap_frame.is_valid():
         outfd.write("User Trap Frame is Invalid\n")
