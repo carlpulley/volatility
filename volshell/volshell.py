@@ -186,6 +186,9 @@ class BaseVolshell(commands.Command):
 
     If multiple processes match the given PID or name, you will be shown a
     list of matching processes, and will have to specify by offset.
+
+    Calling this function with no arguments simply prints out the current 
+    context.
     """
     if pid is not None:
       offsets = []
@@ -213,12 +216,11 @@ class BaseVolshell(commands.Command):
         raise VolshellException(err)
       else:
         offset = offsets[0].v()
-    elif offset is None:
-      raise VolshellException("Must provide one of: offset, name, or pid as a argument.")
 
-    self.proc = obj.Object("_EPROCESS", offset = offset, vm = self.addrspace)
+    if pid is not None or name is not None or offset is not None:
+      self.proc = obj.Object("_EPROCESS", offset = offset, vm = self.addrspace)
 
-    print "Current context: process {0}, pid={1}, ppid={2} DTB={3:#x}".format(self.getImageName(self.proc), self.getPid(self.proc).v(), self.getPPid(self.proc), self.getDTB(self.proc).v())
+    print "Current context: process {0}, pid={1}, ppid={2}, DTB={3:#x}".format(self.getImageName(self.proc), self.getPid(self.proc).v(), self.getPPid(self.proc), self.getDTB(self.proc).v())
 
   def db(self, address, length = 0x80, space = None):
     """Print bytes as canonical hexdump.
