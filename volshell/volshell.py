@@ -31,8 +31,10 @@ import sys
 import volatility.addrspace as addrspace
 import volatility.commands as commands
 import volatility.conf as conf
+import volatility.debug as debug
 import volatility.exceptions as exceptions
 import volatility.obj as obj
+import volatility.plugins as plugins
 import volatility.registry as registry
 import volatility.utils as utils
 
@@ -519,7 +521,13 @@ class Volshell(BaseVolshell):
       self.library_mode = True
       self.__init__.__func__.__doc__ = "INITIALISED IN LIBRARY MODE"
       # Use kwargs to fake command line arguments
-      sys.argv = ["volshell"] + [ "--{0}={1}".format(key, val) for key, val in kwargs.items() ]
+      if "plugins" in kwargs:
+        plugins.__path__ += kwargs["plugins"].split(plugins.plugin_separator)
+      if "debug" in kwargs:
+        debug.setup(min(int(kwargs["debug"]), debug.MAX_DEBUG))
+      else:
+        debug.setup()
+      sys.argv = ["volshell"] + [ "--{0}={1}".format(key, val) for key, val in kwargs.items() if key not in ["plugins", "debug"] ]
       # (Singleton) config object is basically empty (this is the first time it is created)
       config = conf.ConfObject()
       # Load up plugin modules now (they may set config options)
