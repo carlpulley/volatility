@@ -45,6 +45,31 @@ CURRENT LIMITATIONS: exportfile.py should work with Volatility 2.0 whilst
 Other Plugins
 =============
 
+  symbols.py - this plugin is designed to resolve Windows addresses to the nearest 
+    function/method name within a symbol table. The plugin's lookup method is used 
+    for this purpose.
+
+    When the --symbols option is specified, symbol tables are built using Microsoft's 
+    debugging symbol information. The symbol PDB files are downloaded and cached within 
+    Volatility's caching directories. Brendan Dolan-Gavitt's pdbparse is used here.
+
+    If --symbols is not specified or no symbol information is available, then module 
+    exports information are used to populate the symbols tables.
+
+    Example usage (using the installed volshell plugin below):
+
+      from volatility.plugins.volshell import Volshell
+
+      def symbol_lookup(mem_image, pid, addrs):
+        shell = Volshell(filename=mem_image, plugins="/path/to/plugins")
+        shell.cc(pid=pid)
+        sym_lookup = shell.symbols(table_data=False, symbols=True)
+        return [ sym_lookup(shell.proc, addr) for addr in addrs ]
+
+    NOTE: due to a bug in pdbparse's src/undname.c code, it is currently necessary to 
+      hand patch this file prior building pdbparse. For more details, see:
+          https://code.google.com/p/pdbparse/issues/detail?id=13
+
   volshell.py - this plugin is a reworking of the existing Volatility volshell
     plugin. Major changes are as follows:
       + hh has been deleted. All help information is now available as Python
