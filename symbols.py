@@ -271,14 +271,14 @@ class Symbols(commands.Command):
     debug_dir = mod.get_debug_directory()
     if not is_valid_debug_dir(debug_dir, image_base, addr_space):
       # No joy in this process space, search other process spaces in order to locate alternative (valid) debugging data
-      if (mod_path, mod_name) not in self.module_map:
+      if (mod_path, mod_name) not in self.module_map.keys():
         # No alternative debug directories, so return
         return
       for alt_mod in self.module_map[mod_path, mod_name]:
         if alt_mod == mod:
           continue
         debug_dir = alt_mod.get_debug_directory()
-        if is_valid_debug_dir(debug_dir, image_base, addr_space):
+        if is_valid_debug_dir(debug_dir, alt_mod.DllBase, alt_mod.obj_vm):
           # Got one! Need to update environment variables appropriately
           mod = alt_mod
           addr_space = alt_mod.obj_vm
