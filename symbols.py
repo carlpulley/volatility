@@ -63,6 +63,7 @@ try:
   pdbparse_installed = True
 except ImportError:
   pdbparse_installed = False
+from inspect import isfunction
 import ntpath
 import os
 from operator import attrgetter
@@ -73,6 +74,7 @@ import urllib2
 import volatility.commands as commands
 import volatility.debug as debug
 import volatility.obj as obj
+import volatility.plugins.overlays.windows.windows as windows
 import volatility.utils as utils
 import volatility.win32.tasks as tasks
 try:
@@ -110,6 +112,10 @@ class PDBOpener(FancyURLopener):
 class DummyOmap(object):
   def remap(self, addr):
     return addr
+
+#--------------------------------------------------------------------------------
+# symbol resolution classes
+#--------------------------------------------------------------------------------
 
 class Address(object):
   def __init__(self, mod):
@@ -150,36 +156,17 @@ class RebaseAddress(Address):
   def __repr__(self):
     return repr(self.rva)
 
-class Symbols(commands.Command):
-  """
-  Symbols objects are used to resolve addresses (e.g. functions, methods, etc.) using 
-  Microsoft's debugging symbols (i.e. PDB files). Name resolution is performed (via the
-   lookup method) relative to a given processes address space.
+#--------------------------------------------------------------------------------
+# profile modifications  
+#--------------------------------------------------------------------------------
 
-  When pdbparse is installed, addresses can resolve to names with the format:
-
-      module.pdb!name+0x0FF
-
-  When pdbparse is *not* installed, we failover to using export symbols from the owning 
-  module. In which case, addresses resolve to names with the format:
-
-      ????/module!name+0x0FF
-
-  Here ???? indicates that debugging symbols could not be consulted during the name resolution 
-  process.
-
-  When names can not be resolved, they resolve to UNKNOWN. The null address resolves 
-  to '-'.
-  """
-
-  def __init__(self, config, *args, **kwargs):
-    commands.Command.__init__(self, config, *args, **kwargs)
-    config.add_option("SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Use symbol servers to resolve process addresses to module names")
-
-    self.kdbg = tasks.get_kdbg(utils.load_as(config))
-    self.use_symbols = getattr(config, 'SYMBOLS', False)
-    if self.use_symbols and not pdbparse_installed:
-      debug.error("pdbparse (>= 1.1 [r102]) needs to be installed in order to use --symbols")
+class SymbolTable(object):
+  def __init__(self, addr_space, use_symbols=False):
+    if use_symbols:
+      # Used to cache debugging symbol files (Volatility cache storeage area used, but we manage things manually)
+      self._cache_sym_path = "{0}/symbols/{1}".format(addr_space._config.CACHE_DIRECTORY, addr_space.profile.__class__.__name__)
+      if not os.path.exists(self._cache_sym_path):
+        os.makedirs(self._cache_sym_path)
 
     # Module exports and symbol server data (sans mod_base info.) - dict( (mod_path, mod_name): dict( func_rva: Address ) )
     self.exports_sym_table = {}
@@ -192,21 +179,17 @@ class Symbols(commands.Command):
     # dict( (mod_path, mod_name): set( mod ) )
     self.module_map = {}
 
-    if self.use_symbols:
-      # Used to cache debugging symbol files (Volatility cache storeage area used, but we manage things manually)
-      self._cache_sym_path = "{0}/symbols/{1}".format(config.CACHE_DIRECTORY, config.PROFILE)
-      if not os.path.exists(self._cache_sym_path):
-        os.makedirs(self._cache_sym_path)
-
-  def calculate(self):
+    self.use_symbols = use_symbols
+  
     debug.info("Building function symbol tables for kernel space...")
-    for mod in self.kdbg.modules():
+    kdbg = tasks.get_kdbg(addr_space)
+    for mod in kdbg.modules():
       self.add_exports(mod)
       self.system_modules.append( (self.module_path(mod), self.module_name(mod), int(mod.DllBase)) )
-      self.update_with_debug_symbols(self.kdbg.obj_vm, mod)
-    for eproc in self.kdbg.processes():
+      self.update_with_debug_symbols(kdbg.obj_vm, mod)
+    for eproc in kdbg.processes():
       pid = int(eproc.UniqueProcessId)
-      if pid not in self.user_modules:
+      if pid not in self.user_modules.keys():
         self.user_modules[pid] = []
       for mod in eproc.get_load_modules():
         mod_path = self.module_path(mod)
@@ -217,32 +200,16 @@ class Symbols(commands.Command):
         self.user_modules[pid].append( (mod_path, mod_name, int(mod.DllBase)) )
         # Symbol server and export process space symbols are added lazily when lookup method is actually called
 
-    # We return our lookup method for use by calling code
-    return self.lookup
-
-  # _data here is our lookup function - so we ignore this as it can be accessed directly here via self.lookup
-  def render_text(self, outfd, _data):
-    self.table_header(outfd, [
-      ('Process ID', '<16'),
-      ('Module', '<16'),
-      ("Function Address", '<16'),
-      ("Function Name", "<")
-    ])
-    for eproc in self.kdbg.processes():
-      pid = int(eproc.UniqueProcessId)
-      sym_table = self.get_sym_table(eproc)
-      for func_addr, sym in sym_table.items():
-        self.table_row(outfd, pid, sym.module_name, "{0:#010x}".format(func_addr), repr(sym))
-
   def module_name(self, mod):
     # Normalised module name (without base directory)
     return ntpath.normpath(ntpath.normcase(ntpath.basename(str(mod.BaseDllName))))
-
+  
   def module_path(self, mod):
     # Normalised directory path holding module
     # FIXME: should we be performing any shell expansion here (e.g. SystemRoot == c:\\WINDOWS)?
     return ntpath.normpath(ntpath.normcase(ntpath.dirname(str(mod.FullDllName))))
 
+  # TODO: when no symbols is specified, we may need to look in other process spcaes for good module data?
   def add_exports(self, mod):
     mod_path = self.module_path(mod)
     mod_name = self.module_name(mod)
@@ -261,8 +228,8 @@ class Symbols(commands.Command):
   #   https://code.google.com/p/pdbparse/source/browse/trunk/pdbparse/symlookup.py
   def update_with_debug_symbols(self, addr_space, mod):
     def is_valid_debug_dir(debug_dir, image_base, addr_space):
-      return debug_dir != None and debug_dir.AddressOfRawData != 0 and addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData) and addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData + debug_dir.SizeOfData - 1)
-
+      return debug_dir != None and debug_dir.AddressOfRawData != 0 and addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData) and   addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData + debug_dir.SizeOfData - 1)
+  
     if not self.use_symbols:
       return
     mod_path = self.module_path(mod)
@@ -304,17 +271,17 @@ class Symbols(commands.Command):
     # We have valid CodeView debugging information, so try and download PDB file from a symbol server
     saved_mod_path = self._cache_sym_path + os.sep + guid + os.sep + filename
     # Only preform rechecks for downloads every RETRY_TIMEOUT hours
-    if not os.path.exists(saved_mod_path + ".ts") or (not os.path.exists(saved_mod_path) and time.time() - os.path.getmtime(saved_mod_path + ".ts") > RETRY_TIMEOUT * 60 * 60):
+    if not os.path.exists(saved_mod_path + ".ts") or (not os.path.exists(saved_mod_path) and time.time() - os.path.getmtime(saved_mod_path + ".ts") >  RETRY_TIMEOUT * 60 * 60):
       if not os.path.exists(os.path.dirname(saved_mod_path)):
         os.makedirs(os.path.dirname(saved_mod_path))
-      Symbols.download_pdbfile(guid.upper(), filename, os.path.dirname(saved_mod_path))
-      Symbols.touch(saved_mod_path + ".ts")
+      self.download_pdbfile(guid.upper(), filename, os.path.dirname(saved_mod_path))
+      self.touch(saved_mod_path + ".ts")
     # At this point, and if all has gone well, known co-ords should be: mod; image_base; guid; filename
     if not os.path.exists(self._cache_sym_path + os.sep + guid + os.sep + filename):
       debug.warning("Symbols for module {0} (in {1}) not found".format(mod.BaseDllName, filename))
       return
     pdbname = self._cache_sym_path + os.sep + guid + os.sep + filename
-
+  
     try:
       # Do this the hard way to avoid having to load
       # the types stream in mammoth PDB files
@@ -342,7 +309,7 @@ class Symbols(commands.Command):
       sects = pdb.STREAM_SECT_HDR.sections
       omap = DummyOmap()
     gsyms = pdb.STREAM_GSYM
-
+  
     for sym in gsyms.globals:
       if not hasattr(sym, 'offset'): 
         continue
@@ -354,60 +321,21 @@ class Symbols(commands.Command):
   
       sym_rva = omap.remap(off+virt_base)
       item = SymbolAddress(mod, filename, sym_rva, sym.name)
-      if (mod_path, mod_name) not in self.exports_sym_table:
+      if (mod_path, mod_name) not in self.exports_sym_table.keys():
         self.exports_sym_table[mod_path, mod_name] = {}
       # We intentionally overwrite function exports data with more "accurate" debug symbols information
       self.exports_sym_table[mod_path, mod_name][item.address] = item
 
-  def get_sym_table(self, eproc):
-    pid = int(eproc.UniqueProcessId)
-    if pid not in self.sym_table.keys():
-      debug.info("Building function symbol tables for PID {0}...".format(pid))
-      for mod in eproc.get_load_modules():
-        self.add_exports(mod)
-        self.update_with_debug_symbols(eproc.get_process_address_space(), mod)
-
-      sym_table = sorteddict()
-      for mod_path, mod_name, mod_base in self.system_modules + self.user_modules[pid]:
-        for func_addr, func_rva in self.exports_sym_table[mod_path, mod_name].items():
-          item = RebaseAddress(func_rva, mod_base)
-          sym_table[func_addr+mod_base] = item
-      self.sym_table[pid] = sym_table
-    return self.sym_table[pid]
-
-  def lookup(self, eproc, addr):
-    if addr == None:
-      return "-"
-
-    func_name = "UNKNOWN"
-    sym_table = self.get_sym_table(eproc)
-    idx = sym_table.viewkeys().bisect_right(addr) - 1
-    if 0 <= idx:
-      nearest_addr = sym_table.viewkeys()[idx]
-      if addr < sym_table[nearest_addr].limit:
-        # addr is within a loaded module address space
-        func_name = repr(sym_table[nearest_addr])
-        diff = addr - nearest_addr
-        if diff != 0:
-          func_name = "{0}{1:+#x}".format(func_name, diff)
-    if self.use_symbols:
-      return func_name
-    return "????/{0}".format(func_name)
-
-  # The following static utility methods are used to download debugging symbols files (implementation based on [3])
-
   lastprog = None
-  @staticmethod
-  def progress(blocks,blocksz,totalsz):
-    if Symbols.lastprog == None:
+  def progress(self, blocks, blocksz, totalsz):
+    if self.lastprog == None:
         debug.info("Connected. Downloading data...")
     percent = int((100*(blocks*blocksz)/float(totalsz)))
-    if Symbols.lastprog != percent and percent % 5 == 0: 
+    if self.lastprog != percent and percent % 5 == 0: 
       debug.info("{0}%".format(percent))
-    Symbols.lastprog = percent
+    self.lastprog = percent
   
-  @staticmethod
-  def download_pdbfile(guid, filename, path):
+  def download_pdbfile(self, guid, filename, path):
     for sym_url in SYM_URLS:
       url = "{0}/{1}/{2}/".format(sym_url, filename, guid)
       proxy = urllib2.ProxyHandler()
@@ -417,10 +345,10 @@ class Symbols(commands.Command):
         debug.info("Trying {0}".format(url+t))
         outfile = os.path.join(path, t)
         try:
-          PDBOpener().retrieve(url+t, outfile, reporthook=Symbols.progress)
+          PDBOpener().retrieve(url+t, outfile, reporthook=self.progress)
           debug.info("Downloaded symbols and cached at {0}".format(outfile))
           if t.endswith("_"):
-            Symbols.cabextract(outfile, path)
+            self.cabextract(outfile, path)
             debug.info("Unpacked download into {0}".format(path))
             os.remove(outfile)
           return
@@ -429,8 +357,7 @@ class Symbols(commands.Command):
     debug.warning("failed to download debugging symbols for {0}".format(filename))
   
   # This function is used to keep track of attempts at file downloading
-  @staticmethod
-  def touch(path):
+  def touch(self, path):
     now = time.time()
     try:
       os.utime(path, (now, now))
@@ -441,23 +368,129 @@ class Symbols(commands.Command):
       os.utime(path, (now, now))
 
   cabsetup = None
-  @staticmethod
-  def cabextract(filename, path):
-    @staticmethod
+  def cabextract(self, filename, path):
     def _cabextract(filename, path):
       os.system("cabextract -d{0} {1}".format(path, filename))
-    @staticmethod
     def _7z(filename, path):
       os.system("7z -o{0} e {1}".format(path, filename))
   
-    if Symbols.cabsetup != None:
-      Symbols.cabsetup(filename, path)
+    if self.cabsetup != None:
+      self.cabsetup(filename, path)
       return
     for cabfunc in ["_cabextract", "_7z"]:
       try:
-        Symbols.cabsetup = locals()[cabfunc]
-        Symbols.cabsetup(filename, path)
+        self.cabsetup = locals()[cabfunc]
+        self.cabsetup(filename, path)
         return
       except:
         pass
     debug.error("could not unpack the downloaded CAB file - please install cabextract or 7z")
+
+class SymbolsEPROCESS(windows._EPROCESS):
+  _symbol_table = None
+  def symbol_table(self, use_symbols=False):
+    """
+    FIXME: document
+    """
+    if use_symbols and not pdbparse_installed:
+      raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
+
+    if SymbolsEPROCESS._symbol_table == None:
+      SymbolsEPROCESS._symbol_table = SymbolTable(self.get_process_address_space(), use_symbols)
+  
+    pid = int(self.UniqueProcessId)
+    if pid not in SymbolsEPROCESS._symbol_table.sym_table.keys():
+      debug.info("Building function symbol tables for PID {0}...".format(pid))
+      for mod in self.get_load_modules():
+        SymbolsEPROCESS._symbol_table.add_exports(mod)
+        SymbolsEPROCESS._symbol_table.update_with_debug_symbols(self.get_process_address_space(), mod)
+    
+      sym_table = sorteddict()
+      for mod_path, mod_name, mod_base in SymbolsEPROCESS._symbol_table.system_modules + SymbolsEPROCESS._symbol_table.user_modules[pid]:
+        for func_addr, func_rva in SymbolsEPROCESS._symbol_table.exports_sym_table[mod_path, mod_name].items():
+          item = RebaseAddress(func_rva, mod_base)
+          sym_table[func_addr+mod_base] = item
+      SymbolsEPROCESS._symbol_table.sym_table[pid] = sym_table
+    return SymbolsEPROCESS._symbol_table.sym_table[pid]
+
+  def lookup(self, addr, use_symbols=False):
+    """
+    FIXME: document
+    """
+    if use_symbols and not pdbparse_installed:
+      raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
+
+    if addr == None:
+      return "-"
+
+    func_name = "UNKNOWN"
+    sym_table = self.symbol_table(use_symbols=use_symbols)
+    idx = sym_table.viewkeys().bisect_right(addr) - 1
+    if 0 <= idx:
+      nearest_addr = sym_table.viewkeys()[idx]
+      if addr < sym_table[nearest_addr].limit:
+        # addr is within a loaded module address space
+        func_name = repr(sym_table[nearest_addr])
+        diff = addr - nearest_addr
+        if diff != 0:
+          func_name = "{0}{1:+#x}".format(func_name, diff)
+    if use_symbols:
+      return func_name
+    return "????/{0}".format(func_name)
+
+class SymbolsModification(obj.ProfileModification):
+  before = ["WindowsObjectClasses"]
+
+  conditions = {'os': lambda x: x == 'windows'}
+
+  def modification(self, profile):
+    for func in SymbolsEPROCESS.__dict__:
+      if isfunction(SymbolsEPROCESS.__dict__[func]):
+        setattr(profile.object_classes['_EPROCESS'], func, SymbolsEPROCESS.__dict__[func])
+
+#--------------------------------------------------------------------------------
+# main plugin code
+#--------------------------------------------------------------------------------
+
+class Symbols(commands.Command):
+  """
+  Symbols objects are used to resolve addresses (e.g. functions, methods, etc.) using 
+  Microsoft's debugging symbols (i.e. PDB files). Name resolution is performed (via the
+   lookup method) relative to a given processes address space.
+
+  When pdbparse is installed, addresses can resolve to names with the format:
+
+      module.pdb!name+0x0FF
+
+  When pdbparse is *not* installed, we failover to using export symbols from the owning 
+  module. In which case, addresses resolve to names with the format:
+
+      ????/module!name+0x0FF
+
+  Here ???? indicates that debugging symbols could not be consulted during the name resolution 
+  process.
+
+  When names can not be resolved, they resolve to UNKNOWN. The null address resolves 
+  to '-'.
+  """
+
+  def __init__(self, config, *args, **kwargs):
+    commands.Command.__init__(self, config, *args, **kwargs)
+    config.add_option("SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Use symbol servers to resolve process addresses to module names")
+
+    self.kdbg = tasks.get_kdbg(utils.load_as(config))
+    self.use_symbols = getattr(config, 'SYMBOLS', False)
+    if self.use_symbols and not pdbparse_installed:
+      debug.error("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
+
+  def render_text(self, outfd, data):
+    self.table_header(outfd, [
+      ('Process ID', '<16'),
+      ('Module', '<16'),
+      ("Function Address", '<16'),
+      ("Function Name", "<")
+    ])
+    for eproc in self.kdbg.processes():
+      sym_table = eproc.symbol_table(use_symbols=self.use_symbols)
+      for func_addr, sym in sym_table.items():
+        self.table_row(outfd, int(eproc.UniqueProcessId), sym.module_name, "{0:#010x}".format(func_addr), repr(sym))
