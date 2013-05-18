@@ -390,7 +390,11 @@ class SymbolsEPROCESS(windows._EPROCESS):
   _symbol_table = None
   def symbol_table(self, use_symbols=False):
     """
-    FIXME: document
+    Returns the SymbolTable object instance used to hold symbol information. If the current 
+    process has not been previously seen, then symbol information is added to the returned 
+    object instance.
+
+    If the use_symbols option is True, then Microsoft's debugging symbol information is used.
     """
     if use_symbols and not pdbparse_installed:
       raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
@@ -411,20 +415,27 @@ class SymbolsEPROCESS(windows._EPROCESS):
           item = RebaseAddress(func_rva, mod_base)
           sym_table[func_addr+mod_base] = item
       SymbolsEPROCESS._symbol_table.sym_table[pid] = sym_table
-    return SymbolsEPROCESS._symbol_table.sym_table[pid]
+    return SymbolsEPROCESS._symbol_table
 
   def lookup(self, addr, use_symbols=False):
     """
-    FIXME: document
+    Resolves addr to the nearest function/method name within this processes symbol table. 
+
+    When the use_symbols option is True, symbol tables are built using Microsoft's 
+    debugging symbol information. The symbol PDB files are downloaded and cached within 
+    Volatility's caching directories.
+    
+    If use_symbols is False or no symbol information is available, then module exports 
+    information is used to populate the symbols tables.
     """
     if use_symbols and not pdbparse_installed:
-      raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
+      raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use PDB symbol information")
 
     if addr == None:
       return "-"
 
     func_name = "UNKNOWN"
-    sym_table = self.symbol_table(use_symbols=use_symbols)
+    sym_table = self.symbol_table(use_symbols=use_symbols).sym_table[int(self.UniqueProcessId)]
     idx = sym_table.viewkeys().bisect_right(addr) - 1
     if 0 <= idx:
       nearest_addr = sym_table.viewkeys()[idx]
