@@ -3,6 +3,9 @@
 # symbols.py
 # Copyright (C) 2013 Carl Pulley <c.j.pulley@hud.ac.uk>
 #
+# Donated under Volatility Foundation, Inc. Individual Contributor Licensing
+# Agreement
+#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; either version 2 of the License, or (at
