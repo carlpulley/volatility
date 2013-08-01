@@ -507,7 +507,7 @@ class Volshell(BaseVolshell):
 
   In the current shell session: 
     self.proc has the current context's _EPROCESS object; 
-    the images address space is in self.addrspace; 
+    the images Kernel/Virtual address space is in self.addrspace (use self.proc.get_process_address_space() for Process address space); 
     and all shell command are self.<command> methods (aliased using <command> = self.<command>).
 
   Creating an instance of Volshell *without* specifying a config object causes Volshell to 
