@@ -507,4 +507,5 @@ class Symbols(commands.Command):
     for eproc in self.kdbg.processes():
       sym_obj = eproc.symbol_table(use_symbols=self.use_symbols)
       for func_addr, sym in sym_obj.sym_table[int(eproc.UniqueProcessId)].items():
-        self.table_row(outfd, int(eproc.UniqueProcessId), sym.module_name, "{0:#010x}".format(func_addr), repr(sym))
+        func_name = eproc.lookup(func_addr, use_symbols=self.use_symbols)
+        self.table_row(outfd, int(eproc.UniqueProcessId), sym.module_name, "{0:#010x}".format(func_addr), func_name)
