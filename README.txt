@@ -73,8 +73,13 @@ Other Plugins
       volshell> self.proc.lookup(0xb25fc838)
       'sysaudio.sys/PAGE!CClockInstance::ClockGetCorrelatedPhysicalTime'
 
-      volshell> self.proc.lookup("kernel32/.data!__security_cookie")
-      [ 0x???????? ]
+      # stack cookie address for ntoskrnl.exe
+      volshell> self.proc.lookup("ntoskrnl.exe/.data!___security_cookie")
+      [ 2153029696L ]
+
+      # "all" (known) stack cookie addresses within self.proc's address space
+      volshell> self.proc.lookup(".data!___security_cookie")
+      [ 2153029696L, 2154673632L, 4166547756L, ... ]
 
     NOTE: due to a bug in pdbparse's src/undname.c code, it is currently necessary to 
       hand patch this file prior building pdbparse. For more details, see:
