@@ -22,25 +22,25 @@
 #
 
 """
-Code here is designed to resolve addresses to the nearest function/method name 
-within a symbol table. 
+This code is designed to resolve addresses or symbol names. 
 
-When the --symbols option is specified, symbol tables are built using Microsoft's 
-debugging symbol information. The symbol PDB files are downloaded and cached within 
-Volatility's caching directories.
+When the --use_symbols option is specified, then Microsoft's debugging symbol 
+information is used to perform lookups. The symbol PDB files are downloaded and 
+processed into SQLite3 DB entries that are saved within Volatility's caching 
+directories.
 
-If --symbols is not specified or no symbol information is available, then module 
-exports information is used to populate the symbols tables.
+If --use_symbols is *not* specified, then module exports information is used to 
+resolve lookups.
 
 @author:       Carl Pulley
 @license:      GNU General Public License 2.0 or later
 @contact:      c.j.pulley@hud.ac.uk
 
 DEPENDENCIES:
-  blist
   construct (pdbparse dependency)
   pdbparse (along with cabextract or 7z) - need to install >= 1.1 [>= r104]
   pefile (pdbparse dependency)
+  sqlite3
 
 REFERENCES:
 [1] Fog, A. (2012). Calling conventions for different C++ compilers and operating systems. 
@@ -56,6 +56,10 @@ REFERENCES:
 [5] Mozilla (2007) symbolstore - Runs dump_syms over debug info files. Retrieved 
     7/Apr/2013 from:
       http://mxr.mozilla.org/mozilla-central/source/toolkit/crashreporter/tools/symbolstore.py
+[6] Wine (2006). pdb.c source file from the winedump tool. Retrieved 12/Aug/2013 from:
+      http://source.winehq.org/source/tools/winedump/pdb.c
+[7] Schreiber, S. B. (2001). Undocumented Windows 2000 Secrets: A Programmers Cookbook. 
+    Addison-Wesley. ISBN 0-201-72187-2.
 """
 
 try:
@@ -63,15 +67,17 @@ try:
   import pdbparse.peinfo
   from pdbparse.undecorate import undecorate as msvc_undecorate
   from pdbparse.undname import undname as msvcpp_undecorate
-  pdbparse_installed = True
 except ImportError:
-  pdbparse_installed = False
+  debug.error("pdbparse (>= 1.1 [r104]) needs to be installed in order to use the symbols plugin/code")
 from inspect import isfunction
 import ntpath
 import os
-from operator import attrgetter
+import re
+import shutil
+import sqlite3
 import sys
 import time
+import tempfile
 from urllib import FancyURLopener
 import urllib2
 import volatility.commands as commands
@@ -80,15 +86,9 @@ import volatility.obj as obj
 import volatility.plugins.overlays.windows.windows as windows
 import volatility.utils as utils
 import volatility.win32.tasks as tasks
-try:
-  from blist import sorteddict
-except ImportError:
-  debug.error("this code uses a sorteddict for building the symbol table - please install blist")
 
 # URLs to query when searching for debugging symbols
 SYM_URLS = [ 'http://msdl.microsoft.com/download/symbols', 'http://symbols.mozilla.org/firefox', 'http://chromium-browser-symsrv.commondatastorage.googleapis.com' ]
-# number of hours to wait before attempting a failed debugging symbols download (default is 1 year)
-RETRY_TIMEOUT = 365*24 
 
 class NameParser(object):
   def undecorate(self, dname):
@@ -117,91 +117,140 @@ class DummyOmap(object):
     return addr
 
 #--------------------------------------------------------------------------------
-# symbol resolution classes
-#--------------------------------------------------------------------------------
-
-class Address(object):
-  def __init__(self, mod):
-    self.module_name = str(mod.BaseDllName)
-    self.limit = int(mod.SizeOfImage)
-    self.parser = NameParser()
-
-class FunctionAddress(Address):
-  def __init__(self, mod, ordinal, func_rva, func_name):
-    assert func_rva != None
-    Address.__init__(self, mod)
-    self.address = int(func_rva)
-    if func_name == None:
-      self.name = str(ordinal or '')
-    else:
-      self.name = str(self.parser.undecorate(str(func_name))[0])
-
-  def __repr__(self):
-    return "{0}!{1}".format(self.module_name, self.name)
-
-class SymbolAddress(Address):
-  def __init__(self, mod, pdbfile, func_rva, func_name):
-    Address.__init__(self, mod)
-    self.module_name = pdbfile
-    self.address = int(func_rva)
-    self.name = str(self.parser.undecorate(str(func_name))[0])
-
-  def __repr__(self):
-    return "{0}!{1}".format(self.module_name, self.name)
-
-class RebaseAddress(Address):
-  def __init__(self, rva, base_addr):
-    self.rva = rva
-    self.module_name = rva.module_name
-    self.limit = int(rva.limit + base_addr)
-    self.address = int(rva.address + base_addr)
-
-  def __repr__(self):
-    return repr(self.rva)
-
-#--------------------------------------------------------------------------------
 # profile modifications  
 #--------------------------------------------------------------------------------
 
 class SymbolTable(object):
-  def __init__(self, addr_space, use_symbols=False):
-    if use_symbols:
-      # Used to cache debugging symbol files (Volatility cache storeage area used, but we manage things manually)
-      self._cache_sym_path = "{0}/symbols/{1}".format(addr_space._config.CACHE_DIRECTORY, addr_space.profile.__class__.__name__)
-      if not os.path.exists(self._cache_sym_path):
-        os.makedirs(self._cache_sym_path)
+  def __init__(self, addr_space, build_symbols):
+    self.parser = NameParser()
 
-    # Module exports and symbol server data (sans mod_base info.) - dict( (mod_path, mod_name): dict( func_rva: Address ) )
-    self.exports_sym_table = {}
-    # System module load data - list(mod_path, mod_name, mod_actual_base)
-    self.system_modules = []
-    # Process/user module load data - dict( pid: list(mod_path, mod_name, mod_actual_base) )
-    self.user_modules = {}
-    # The actual per process symbol table - dict( pid: sorteddict( func_addr: RebaseAddress ) )
-    self.sym_table = {}
-    # dict( (mod_path, mod_name): set( mod ) )
-    self.module_map = {}
+    # Used to cache symbol/export/module information in an SQLite3 DB
+    # NB: Volatility cache storeage area used, but we manage things manually.
+    cache_sym_db_path = "{0}/symbols".format(addr_space._config.CACHE_DIRECTORY)
+    if not os.path.exists(cache_sym_db_path):
+      os.makedirs(cache_sym_db_path)
+    self._sym_db_conn = sqlite3.connect("{0}/{1}.db".format(cache_sym_db_path, addr_space.profile.__class__.__name__))
+    db = self.get_cursor()
+    db.execute("attach ':memory:' as volatility")
+    self._sym_db_conn.commit()
 
-    self.use_symbols = use_symbols
-  
-    debug.info("Building function symbol tables for kernel space...")
     kdbg = tasks.get_kdbg(addr_space)
+
+    # Build tables and indexes
+    self.create_tables(db)
+
+    # Insert kernel space module information
+    debug.info("Building function symbol tables for kernel space...")
     for mod in kdbg.modules():
-      self.add_exports(mod)
-      self.system_modules.append( (self.module_path(mod), self.module_name(mod), int(mod.DllBase)) )
-      self.update_with_debug_symbols(kdbg.obj_vm, mod)
+      if build_symbols:
+        # Module row created by add_exports if it doesn't already exist
+        self.add_exports(db, mod)
+        self.add_debug_symbols(db, kdbg.obj_vm, mod)
+      # Link in system modules to each process
+      for eproc in kdbg.processes():
+        self.add_module(db, eproc, mod)
+
+    # Insert (per process) user space module information
+    debug.info("Building function symbol tables for each processes user space...")
     for eproc in kdbg.processes():
-      pid = int(eproc.UniqueProcessId)
-      if pid not in self.user_modules.keys():
-        self.user_modules[pid] = []
+      debug.info("Processing PID {0} ...".format(int(eproc.UniqueProcessId)))
       for mod in eproc.get_load_modules():
-        mod_path = self.module_path(mod)
-        mod_name = self.module_name(mod)
-        if (mod_path, mod_name) not in self.module_map.keys():
-          self.module_map[mod_path, mod_name] = set()
-        self.module_map[mod_path, mod_name].add(mod)
-        self.user_modules[pid].append( (mod_path, mod_name, int(mod.DllBase)) )
-        # Symbol server and export process space symbols are added lazily when lookup method is actually called
+        if build_symbols:
+          # Module row created by add_exports if it doesn't already exist
+          self.add_exports(db, mod)
+          self.add_debug_symbols(db, eproc.get_process_address_space(), mod)
+        # Link in user module to current process
+        self.add_module(db, eproc, mod)
+
+    debug.info("Symbol tables successfully built")
+
+  def __del__(self):
+    self._sym_db_conn.close()
+
+  def create_tables(self, db):
+    """
+    Class Diagram
+    =============
+
+    ....................
+    :                  :
+    : process *---------* module *-------* pdb -------* symbol
+    :             |    :    |        |
+    :            base  :    *     mod_pdb
+    ....................  export
+    In-memory tables
+    """
+
+    db.execute("""CREATE TABLE IF NOT EXISTS module (
+      id INTEGER PRIMARY KEY, 
+      name TEXT NOT NULL,
+      mpath TEXT NOT NULL,
+      mlimit INTEGER NOT NULL,
+      UNIQUE(mpath, name)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS module_name ON module(name)")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS export (
+      id INTEGER PRIMARY KEY,  
+      module_id INTEGER NOT NULL, 
+      ordinal INTEGER,
+      name TEXT,
+      rva INTEGER NOT NULL,
+      FOREIGN KEY(module_id) REFERENCES module(id)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS export_name ON export(name)")
+    db.execute("CREATE INDEX IF NOT EXISTS export_addr ON export(rva)")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS mod_pdb (
+      id INTEGER PRIMARY KEY,  
+      module_id INTEGER NOT NULL,
+      pdb_id INTEGER NOT NULL,
+      FOREIGN KEY(module_id) REFERENCES module(id),
+      FOREIGN KEY(pdb_id) REFERENCES pdb(id)
+    )""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS pdb (
+      id INTEGER PRIMARY KEY,
+      file TEXT NOT NULL,
+      guid TEXT,
+      src TEXT,
+      downloaded_at TEXT,
+      UNIQUE(guid, file, src)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS pdb_file ON pdb(file)")
+    db.execute("CREATE INDEX IF NOT EXISTS pdb_guid ON pdb(guid)")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS symbol (
+      id INTEGER PRIMARY KEY, 
+      pdb_id INTEGER NOT NULL, 
+      type INTEGER NOT NULL,
+      section TEXT NOT NULL,
+      name TEXT NOT NULL,
+      rva INTEGER NOT NULL,
+      FOREIGN KEY(pdb_id) REFERENCES pdb(id)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS symbol_name ON symbol(section, name)")
+    db.execute("CREATE INDEX IF NOT EXISTS symbol_addr ON symbol(rva)")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS volatility.process (
+      id INTEGER PRIMARY KEY, 
+      eproc INTEGER NOT NULL,
+      UNIQUE (eproc)
+    )""")
+
+    db.execute("""CREATE TABLE IF NOT EXISTS volatility.base (
+      id INTEGER PRIMARY KEY,  
+      process_id INTEGER NOT NULL, 
+      module_id INTEGER NOT NULL,
+      addr INTEGER NOT NULL,
+      FOREIGN KEY(process_id) REFERENCES process(id),
+      FOREIGN KEY(module_id) REFERENCES module(id)
+    )""")
+
+    self._sym_db_conn.commit()
+
+  def get_cursor(self):
+    return self._sym_db_conn.cursor()
 
   def module_name(self, mod):
     # Normalised module name (without base directory)
@@ -212,53 +261,235 @@ class SymbolTable(object):
     # FIXME: should we be performing any shell expansion here (e.g. SystemRoot == c:\\WINDOWS)?
     return ntpath.normpath(ntpath.normcase(ntpath.dirname(str(mod.FullDllName))))
 
-  # TODO: when no symbols is specified, we may need to look in other process spcaes for good module data?
-  def add_exports(self, mod):
+  def module_id(self, db, mod):
     mod_path = self.module_path(mod)
     mod_name = self.module_name(mod)
-    if (mod_path, mod_name) not in self.exports_sym_table:
-      # First time we've seen this module...
-      self.exports_sym_table[mod_path, mod_name] = {}
-      for ordinal, func_addr, func_name in mod.exports():
-        # Here we ignore forwarded exports as no function address resolves to them!
-        if func_addr != None:
-          item = FunctionAddress(mod, ordinal, func_addr, func_name)
-          self.exports_sym_table[mod_path, mod_name][item.address] = item
+
+    db.execute("SELECT id FROM module WHERE mpath=? AND name=?", (mod_path, mod_name))
+    row = db.fetchone()
+    if row == None:
+      mod_name = self.module_name(mod)
+      mod_path = self.module_path(mod)
+      mod_limit = int(mod.SizeOfImage)
+      db.execute("INSERT INTO module(name, mpath, mlimit) VALUES (?, ?, ?)", (mod_name, mod_path, mod_limit))
+      self._sym_db_conn.commit()
+      db.execute("SELECT id FROM module WHERE mpath=? AND name=?", (mod_path, mod_name))
+      row = db.fetchone()
+
+    return row[0]
+
+  def process_id(self, db, eproc):
+    eproc_addr = int(eproc.v())
+    db.execute("SELECT id FROM volatility.process WHERE eproc=?", (eproc_addr,))
+    row = db.fetchone()
+    if row == None:
+      db.execute("INSERT INTO volatility.process(eproc) VALUES (?)", (eproc_addr,))
+      self._sym_db_conn.commit()
+      db.execute("SELECT id FROM volatility.process WHERE eproc=?", (eproc_addr,))
+      row = db.fetchone()
+
+    return row[0]
+
+  def do_download(self, db, module_id, guid, filename):
+    db.execute("""SELECT * 
+      FROM mod_pdb
+        INNER JOIN pdb ON pdb_id=pdb.id 
+      WHERE module_id=? 
+        AND guid=? 
+        AND file=? 
+        AND downloaded_at IS NOT NULL
+    """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+    row = db.fetchone()
+    if row == None:
+      return True
+    return False
+
+  def lookup_name(self, eproc, addr, use_symbols):
+    db = self.get_cursor()
+
+    # Locate the module our address may reside in
+    db.execute("""SELECT module.id, module.name, base.addr
+      FROM volatility.process AS process
+        INNER JOIN volatility.base AS base ON base.process_id = process.id 
+        INNER JOIN module ON base.module_id = module.id 
+      WHERE base.addr <= :addr 
+        AND :addr < base.addr + module.mlimit
+      GROUP BY module.id, module.name, base.addr
+    """, { "addr": addr })
+    row = db.fetchall()
+    if len(row) == 0:
+      return "UNKNOWN"
+    assert(len(row) == 1)
+    module_id, module_name, module_base = row[0]
+
+    # Locate the module's symbol range our address may reside in
+    if use_symbols:
+      db.execute("""SELECT section, name, :addr - rva - :module_base
+        FROM mod_pdb
+          INNER JOIN pdb ON mod_pdb.pdb_id = pdb.id
+          INNER JOIN symbol ON pdb.id = symbol.pdb_id
+        WHERE module_id = :module_id 
+          AND rva IN (SELECT MAX(rva) FROM symbol WHERE module_id = :module_id AND rva + :module_base <= :addr)
+        GROUP BY section, name, :addr - rva - :module_base 
+      """, { "module_id": module_id, "module_base": module_base, "addr": addr })
+      row = db.fetchall()
+      if len(row) == 0:
+        return "UNKNOWN"
+      assert(len(row) == 1)
+      section_name, func_name, diff = row[0]
+      func_name = str(self.parser.undecorate(str(func_name))[0])
     else:
-      debug.debug("Encountered module {0} multiple times!".format(mod_name))
+      section_name = "????"
+      db.execute("""SELECT ordinal, name, :addr - rva - :module_base
+        FROM export 
+        WHERE module_id = :module_id 
+          AND rva IN (SELECT MAX(rva) FROM export WHERE module_id = :module_id AND rva + :module_base <= :addr)
+        GROUP BY ordinal, name, :addr - rva - :module_base 
+      """, { "module_id": module_id, "module_base": module_base, "addr": addr })
+      row = db.fetchall()
+      if len(row) == 0:
+        return "UNKNOWN"
+      assert(len(row) == 1)
+      ordinal, func_name, diff = row[0]
+      if func_name == "":
+        func_name = str(ordinal or '')
+      else:
+        func_name = str(self.parser.undecorate(str(func_name))[0])
+
+    if diff == 0:
+      diff = ""
+    else:
+      diff = "{0:+#x}".format(diff)
+
+    return "{0}/{1}!{2}{3}".format(module_name, section_name, func_name, diff)
+
+  # TODO: implement mapping from name to decorated form?
+  def lookup_addr(self, eproc, name, section, module, use_symbols):
+    db = self.get_cursor()
+    
+    if use_symbols:
+      if section != None and module != None:
+        sql_query = """SELECT base.addr + rva 
+          FROM symbol
+            INNER JOIN pdb ON symbol.pdb_id = pdb.id 
+            INNER JOIN mod_pdb ON mod_pdb.pdb_id = pdb.id
+            INNER JOIN module ON mod_pdb.module_id = module.id
+            INNER JOIN volatility.base AS base ON base.module_id = module.id 
+            INNER JOIN volatility.process AS process ON base.process_id = process.id 
+          WHERE section = :section 
+            AND module.name = :module
+            AND symbol.name = :name 
+            AND process.eproc = :eproc
+        """
+        sql_vars = { "eproc": int(eproc.v()), "name": name, "section": section, "module": module }
+      elif section == None and module != None:
+        sql_query = """SELECT base.addr + rva 
+          FROM symbol
+            INNER JOIN pdb ON symbol.pdb_id = pdb.id 
+            INNER JOIN mod_pdb ON mod_pdb.pdb_id = pdb.id
+            INNER JOIN module ON mod_pdb.module_id = module.id
+            INNER JOIN volatility.base AS base ON base.module_id = module.id 
+            INNER JOIN volatility.process AS process ON base.process_id = process.id 
+          WHERE module.name = :module
+            AND symbol.name = :name 
+            AND process.eproc = :eproc
+        """
+        sql_vars = { "eproc": int(eproc.v()), "name": name, "module": module }
+      elif section != None and module == None:
+        sql_query = """SELECT base.addr + rva 
+          FROM symbol
+            INNER JOIN pdb ON symbol.pdb_id = pdb.id 
+            INNER JOIN mod_pdb ON mod_pdb.pdb_id = pdb.id
+            INNER JOIN module ON mod_pdb.module_id = module.id
+            INNER JOIN volatility.base AS base ON base.module_id = module.id 
+            INNER JOIN volatility.process AS process ON base.process_id = process.id 
+          WHERE section = :section 
+            AND symbol.name = :name 
+            AND process.eproc = :eproc
+        """
+        sql_vars = { "eproc": int(eproc.v()), "name": name, "section": section }
+      else:
+        sql_query = """SELECT base.addr + rva 
+          FROM symbol
+            INNER JOIN pdb ON symbol.pdb_id = pdb.id 
+            INNER JOIN mod_pdb ON mod_pdb.pdb_id = pdb.id
+            INNER JOIN module ON mod_pdb.module_id = module.id
+            INNER JOIN volatility.base AS base ON base.module_id = module.id 
+            INNER JOIN volatility.process AS process ON base.process_id = process.id 
+          WHERE symbol.name = :name 
+            AND process.eproc = :eproc
+        """
+        sql_vars = { "eproc": int(eproc.v()), "name": name }
+    else:
+      if module != None:
+        sql_query = """SELECT base.addr + rva 
+          FROM export
+            INNER JOIN module ON export.module_id = module.id 
+            INNER JOIN volatility.base AS base ON base.module_id = module.id 
+            INNER JOIN volatility.process AS process ON base.process_id = process.id 
+          WHERE export.name = :name 
+            AND module.name = :module
+            AND process.eproc = :eproc
+        """
+        sql_vars = { "eproc": int(eproc.v()), "name": name, "module": module }
+      else:
+        sql_query = """SELECT base.addr + rva 
+          FROM export
+            INNER JOIN module ON export.module_id = module.id 
+            INNER JOIN volatility.base AS base ON base.module_id = module.id 
+            INNER JOIN volatility.process AS process ON base.process_id = process.id 
+          WHERE export.name = :name 
+            AND process.eproc = :eproc
+        """
+        sql_vars = { "eproc": int(eproc.v()), "name": name }
+
+    return [ row[0] for row in db.execute(sql_query, sql_vars) ]
+
+  def add_module(self, db, eproc, mod):
+    process_id = self.process_id(db, eproc)
+    module_id = self.module_id(db, mod)
+    mod_base = int(mod.DllBase)
+    db.execute("SELECT * FROM volatility.base WHERE addr=? AND process_id=? AND module_id=?", (mod_base, process_id, module_id))
+    row = db.fetchone()
+    if row == None:
+      # Not previously seen this process/module addressing relationship
+      db.execute("INSERT INTO volatility.base(addr, process_id, module_id) VALUES (?, ?, ?)", (mod_base, process_id, module_id))
+    self._sym_db_conn.commit()
+
+  def add_exports(self, db, mod):
+    module_id = self.module_id(db, mod)    
+
+    for ordinal, func_addr, func_name in mod.exports():
+      # FIXME: when mapping names to addresses, is this correct behaviour?
+      # Here we ignore forwarded exports as no symbol address should resolve to them!
+      if func_addr != None:
+        db.execute("SELECT name FROM export WHERE module_id=? AND rva=?", (module_id, int(func_addr)))
+        row = db.fetchone()
+        if row == None:
+          # We've not previously seen this function export
+          db.execute("INSERT INTO export(module_id, ordinal, name, rva) VALUES (?, ?, ?, ?)", (module_id, int(ordinal), str(func_name or '').rstrip('\0'), int(func_addr)))
+        else:
+          # Only update if the function name is currently unknown (i.e. it was previously referred to via an ordinal)
+          old_func_name = row[0]
+          if old_func_name == '' and func_name != None:
+            db.execute("UPDATE export SET name=? WHERE module_id=? AND rva=?", (str(func_name).rstrip('\0'), module_id, int(func_addr)))
+
+    self._sym_db_conn.commit()
 
   # Following is based on code taken from [3]:
   #   https://code.google.com/p/pdbparse/source/browse/trunk/pdbparse/symlookup.py
-  def update_with_debug_symbols(self, addr_space, mod):
+  def add_debug_symbols(self, db, addr_space, mod):
     def is_valid_debug_dir(debug_dir, image_base, addr_space):
-      return debug_dir != None and debug_dir.AddressOfRawData != 0 and addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData) and   addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData + debug_dir.SizeOfData - 1)
+      return debug_dir != None and debug_dir.AddressOfRawData != 0 and addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData) and addr_space.is_valid_address(image_base + debug_dir.AddressOfRawData + debug_dir.SizeOfData - 1)
   
-    if not self.use_symbols:
-      return
     mod_path = self.module_path(mod)
     mod_name = self.module_name(mod)
+    module_id = self.module_id(db, mod)
     image_base = mod.DllBase
     debug_dir = mod.get_debug_directory()
     if not is_valid_debug_dir(debug_dir, image_base, addr_space):
-      # No joy in this process space, search other process spaces in order to locate alternative (valid) debugging data
-      if (mod_path, mod_name) not in self.module_map.keys():
-        # No alternative debug directories, so return
-        return
-      for alt_mod in self.module_map[mod_path, mod_name]:
-        if alt_mod == mod:
-          continue
-        debug_dir = alt_mod.get_debug_directory()
-        if is_valid_debug_dir(debug_dir, alt_mod.DllBase, alt_mod.obj_vm):
-          # Got one! Need to update environment variables appropriately
-          mod = alt_mod
-          addr_space = alt_mod.obj_vm
-          mod_path = self.module_path(mod)
-          mod_name = self.module_name(mod)
-          image_base = mod.DllBase
-          break
-      if not is_valid_debug_dir(debug_dir, image_base, addr_space):
-        # We were unable to locate any valid debug directories, so return
-        return
+      # No joy in this process space
+      return
     if debug_dir.Type != 2: # IMAGE_DEBUG_TYPE_CODEVIEW
       return
     debug_data = addr_space.zread(image_base + debug_dir.AddressOfRawData, debug_dir.SizeOfData)
@@ -272,62 +503,94 @@ class SymbolTable(object):
     if filename == '':
       return
     # We have valid CodeView debugging information, so try and download PDB file from a symbol server
-    saved_mod_path = self._cache_sym_path + os.sep + guid + os.sep + filename
-    # Only preform rechecks for downloads every RETRY_TIMEOUT hours
-    if not os.path.exists(saved_mod_path + ".ts") or (not os.path.exists(saved_mod_path) and time.time() - os.path.getmtime(saved_mod_path + ".ts") >  RETRY_TIMEOUT * 60 * 60):
-      if not os.path.exists(os.path.dirname(saved_mod_path)):
-        os.makedirs(os.path.dirname(saved_mod_path))
-      self.download_pdbfile(guid.upper(), filename, os.path.dirname(saved_mod_path))
-      self.touch(saved_mod_path + ".ts")
-    # At this point, and if all has gone well, known co-ords should be: mod; image_base; guid; filename
-    if not os.path.exists(self._cache_sym_path + os.sep + guid + os.sep + filename):
-      debug.warning("Symbols for module {0} (in {1}) not found".format(mod.BaseDllName, filename))
-      return
-    pdbname = self._cache_sym_path + os.sep + guid + os.sep + filename
-  
-    try:
-      # Do this the hard way to avoid having to load
-      # the types stream in mammoth PDB files
-      pdb = pdbparse.parse(pdbname, fast_load=True)
-      pdb.STREAM_DBI.load()
-      pdb._update_names()
-      pdb.STREAM_GSYM = pdb.STREAM_GSYM.reload()
-      pdb.STREAM_GSYM.load()
-      pdb.STREAM_SECT_HDR = pdb.STREAM_SECT_HDR.reload()
-      pdb.STREAM_SECT_HDR.load()
-      # These are the dicey ones
-      pdb.STREAM_OMAP_FROM_SRC = pdb.STREAM_OMAP_FROM_SRC.reload()
-      pdb.STREAM_OMAP_FROM_SRC.load()
-      pdb.STREAM_SECT_HDR_ORIG = pdb.STREAM_SECT_HDR_ORIG.reload()
-      pdb.STREAM_SECT_HDR_ORIG.load()
-    except AttributeError:
-      pass
-  
-    try:
-      sects = pdb.STREAM_SECT_HDR_ORIG.sections
-      omap = pdb.STREAM_OMAP_FROM_SRC
-    except AttributeError:
-      # In this case there is no OMAP, so we use the given section
-      # headers and use the identity function for omap.remap
-      sects = pdb.STREAM_SECT_HDR.sections
-      omap = DummyOmap()
-    gsyms = pdb.STREAM_GSYM
-  
-    for sym in gsyms.globals:
-      if not hasattr(sym, 'offset'): 
-        continue
-      off = sym.offset
+    saved_mod_path = tempfile.gettempdir() + os.sep + guid
+    if self.do_download(db, module_id, guid, filename):
+      if not os.path.exists(saved_mod_path):
+        os.makedirs(saved_mod_path)
+      self.download_pdbfile(db, guid.upper(), module_id, filename, saved_mod_path)
+      # At this point, and if all has gone well, known co-ords should be: mod; image_base; guid; filename
+      pdbname = saved_mod_path + os.sep + filename
+      if not os.path.exists(pdbname):
+        shutil.rmtree(saved_mod_path)
+        debug.warning("Symbols for module {0} (in {1}) not found".format(mod.BaseDllName, filename))
+        return
+    
       try:
-        virt_base = sects[sym.segment-1].VirtualAddress
-      except IndexError:
-        continue
+        # Do this the hard way to avoid having to load
+        # the types stream in mammoth PDB files
+        pdb = pdbparse.parse(pdbname, fast_load=True)
+        pdb.STREAM_DBI.load()
+        pdb._update_names()
+        pdb.STREAM_GSYM = pdb.STREAM_GSYM.reload()
+        pdb.STREAM_GSYM.load()
+        pdb.STREAM_SECT_HDR = pdb.STREAM_SECT_HDR.reload()
+        pdb.STREAM_SECT_HDR.load()
+        ## TODO:
+        ## Ensure FPO data is loaded
+        #pdb.STREAM_FPO = pdb.STREAM_FPO.reload()
+        #pdb.STREAM_FPO.load()
+        #pdb.STREAM_FPO_NEW = pdb.STREAM_FPO_NEW.reload()
+        #pdb.STREAM_FPO_NEW.load()
+        #pdb.STREAM_FPO_NEW.load2()
+        # These are the dicey ones
+        pdb.STREAM_OMAP_FROM_SRC = pdb.STREAM_OMAP_FROM_SRC.reload()
+        pdb.STREAM_OMAP_FROM_SRC.load()
+        pdb.STREAM_SECT_HDR_ORIG = pdb.STREAM_SECT_HDR_ORIG.reload()
+        pdb.STREAM_SECT_HDR_ORIG.load()
+      except AttributeError:
+        pass
+    
+      try:
+        sects = pdb.STREAM_SECT_HDR_ORIG.sections
+        omap = pdb.STREAM_OMAP_FROM_SRC
+      except AttributeError:
+        # In this case there is no OMAP, so we use the given section
+        # headers and use the identity function for omap.remap
+        sects = pdb.STREAM_SECT_HDR.sections
+        omap = DummyOmap()
+      gsyms = pdb.STREAM_GSYM
+    
+      for sym in gsyms.globals:
+        if not hasattr(sym, 'offset'): 
+          continue
+        off = sym.offset
+        try:
+          virt_base = sects[sym.segment-1].VirtualAddress
+          section = sects[sym.segment-1].Name
+        except IndexError:
+          continue
+    
+        sym_rva = omap.remap(off+virt_base)
   
-      sym_rva = omap.remap(off+virt_base)
-      item = SymbolAddress(mod, filename, sym_rva, sym.name)
-      if (mod_path, mod_name) not in self.exports_sym_table.keys():
-        self.exports_sym_table[mod_path, mod_name] = {}
-      # We intentionally overwrite function exports data with more "accurate" debug symbols information
-      self.exports_sym_table[mod_path, mod_name][item.address] = item
+        db.execute("""SELECT * 
+          FROM mod_pdb
+            INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
+            INNER JOIN symbol ON symbol.pdb_id=pdb.id 
+          WHERE module_id=? 
+            AND guid=? 
+            AND file=? 
+            AND rva=? 
+            AND section=? 
+            AND name=?
+        """, (module_id, int(sym_rva),  str(section).rstrip('\0'), str(sym.name).rstrip('\0'), str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+        row = db.fetchone()
+        if row == None:
+          # We've not previously seen this function symbol
+          db.execute("""SELECT pdb.id 
+            FROM mod_pdb
+              INNER JOIN pdb ON pdb_id=pdb.id 
+            WHERE module_id=? 
+              AND guid=? 
+              AND file=?
+          """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+          row = db.fetchone()
+          assert(row != None)
+          pdb_id = row[0]
+          db.execute("INSERT INTO symbol(pdb_id, type, section, name, rva) VALUES (?, ?, ?, ?, ?)", (pdb_id, int(sym.symtype), str(section).rstrip('\0'), str(sym.name).rstrip('\0'), int(sym_rva)))
+  
+      shutil.rmtree(saved_mod_path)
+      debug.info("Removed directory {0} and its contents".format(saved_mod_path))
+      self._sym_db_conn.commit()
 
   lastprog = None
   def progress(self, blocks, blocksz, totalsz):
@@ -338,7 +601,20 @@ class SymbolTable(object):
       debug.info("{0}%".format(percent))
     self.lastprog = percent
   
-  def download_pdbfile(self, guid, filename, path):
+  def download_pdbfile(self, db, guid, module_id, filename, path):
+    db.execute("SELECT id FROM pdb WHERE guid=? AND file=?", (str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+    row = db.fetchone()
+    if row == None:
+      db.execute("INSERT INTO pdb(guid, file) VALUES (?, ?)", (str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+      db.execute("SELECT id FROM pdb WHERE guid=? AND file=?", (str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+      row = db.fetchone()
+    pdb_id = row[0]
+    db.execute("SELECT * FROM mod_pdb WHERE module_id=? AND pdb_id=?", (module_id, pdb_id))
+    row = db.fetchone()
+    if row == None:
+      db.execute("INSERT INTO mod_pdb(module_id, pdb_id) VALUES (?, ?)", (module_id, pdb_id))
+    self._sym_db_conn.commit()
+
     for sym_url in SYM_URLS:
       url = "{0}/{1}/{2}/".format(sym_url, filename, guid)
       proxy = urllib2.ProxyHandler()
@@ -354,21 +630,12 @@ class SymbolTable(object):
             self.cabextract(outfile, path)
             debug.info("Unpacked download into {0}".format(path))
             os.remove(outfile)
+            db.execute("UPDATE pdb SET downloaded_at=DATETIME('now'), src=? WHERE id=? AND guid=? AND file=?", (sym_url, pdb_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+            self._sym_db_conn.commit()
           return
         except urllib2.HTTPError, e:
           debug.warning("HTTP error {0}".format(e.code))
-    debug.warning("failed to download debugging symbols for {0}".format(filename))
-  
-  # This function is used to keep track of attempts at file downloading
-  def touch(self, path):
-    now = time.time()
-    try:
-      os.utime(path, (now, now))
-    except os.error:
-      if not os.path.exists(os.path.dirname(path)):
-        os.makedirs(os.path.dirname(path))
-      open(path, "w").close()
-      os.utime(path, (now, now))
+    debug.warning("Failed to download debugging symbols for {0}".format(filename))
 
   cabsetup = None
   def cabextract(self, filename, path):
@@ -391,66 +658,45 @@ class SymbolTable(object):
 
 class SymbolsEPROCESS(windows._EPROCESS):
   _symbol_table = None
-  def symbol_table(self, use_symbols=False):
+  def symbol_table(self, build_symbols=False):
     """
-    Returns the SymbolTable object instance used to hold symbol information. If the current 
-    process has not been previously seen, then symbol information is added to the returned 
-    object instance.
+    Returns the SymbolTable object instance used to access symbol information from the underlying
+    SQLite3 DB.
 
-    If the use_symbols option is True, then Microsoft's debugging symbol information is used.
+    If the build_symbols option is True, then the SQLite3 DB will be rebuilt (if it doesn't exist)
+    or updated (if it exists).
     """
-    if use_symbols and not pdbparse_installed:
-      raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
-
     if SymbolsEPROCESS._symbol_table == None:
-      SymbolsEPROCESS._symbol_table = SymbolTable(self.get_process_address_space(), use_symbols)
-  
-    pid = int(self.UniqueProcessId)
-    if pid not in SymbolsEPROCESS._symbol_table.sym_table.keys():
-      debug.info("Building function symbol tables for PID {0}...".format(pid))
-      for mod in self.get_load_modules():
-        SymbolsEPROCESS._symbol_table.add_exports(mod)
-        SymbolsEPROCESS._symbol_table.update_with_debug_symbols(self.get_process_address_space(), mod)
-    
-      sym_table = sorteddict()
-      for mod_path, mod_name, mod_base in SymbolsEPROCESS._symbol_table.system_modules + SymbolsEPROCESS._symbol_table.user_modules[pid]:
-        for func_addr, func_rva in SymbolsEPROCESS._symbol_table.exports_sym_table[mod_path, mod_name].items():
-          item = RebaseAddress(func_rva, mod_base)
-          sym_table[func_addr+mod_base] = item
-      SymbolsEPROCESS._symbol_table.sym_table[pid] = sym_table
+      SymbolsEPROCESS._symbol_table = SymbolTable(self.get_process_address_space(), build_symbols)
+
     return SymbolsEPROCESS._symbol_table
 
-  def lookup(self, addr, use_symbols=False):
+  def lookup(self, addr_or_name, use_symbols=True):
     """
-    Resolves addr to the nearest function/method name within this processes symbol table. 
+    When an address is given, resolve to the nearest symbol name within this processes 
+    symbol table. 
 
-    When the use_symbols option is True, symbol tables are built using Microsoft's 
-    debugging symbol information. The symbol PDB files are downloaded and cached within 
-    Volatility's caching directories.
-    
-    If use_symbols is False or no symbol information is available, then module exports 
-    information is used to populate the symbols tables.
+    When a name is given, resolve to the matching symbol name within this processes symbol 
+    table and return matching addresses. Section names may be specified using the format:
+
+      MODULE/SECTION!NAME
+
+    If use_symbols is True, then resolving occurs using Microsoft's debugging symbol information.
+    Otherwise, resolving occurs using the module exports information.
     """
-    if use_symbols and not pdbparse_installed:
-      raise ValueError("pdbparse (>= 1.1 [r104]) needs to be installed in order to use PDB symbol information")
-
-    if addr == None:
-      return "-"
-
-    func_name = "UNKNOWN"
-    sym_table = self.symbol_table(use_symbols=use_symbols).sym_table[int(self.UniqueProcessId)]
-    idx = sym_table.viewkeys().bisect_right(addr) - 1
-    if 0 <= idx:
-      nearest_addr = sym_table.viewkeys()[idx]
-      if addr < sym_table[nearest_addr].limit:
-        # addr is within a loaded module address space
-        func_name = repr(sym_table[nearest_addr])
-        diff = addr - nearest_addr
-        if diff != 0:
-          func_name = "{0}{1:+#x}".format(func_name, diff)
-    if use_symbols:
-      return func_name
-    return "????/{0}".format(func_name)
+    if type(addr_or_name) == int or type(addr_or_name) == long:
+      return self.symbol_table().lookup_name(self, int(addr_or_name), use_symbols)
+    elif type(addr_or_name) == str:
+      pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.]"))
+      mobj = pattern.match(addr_or_name)
+      if mobj == None:
+        raise ValueError("lookup: symbol name needs to match the format MODULE/SECTION!NAME")
+      name = mobj.group("name")
+      section = mobj.group("section")
+      module = mobj.group("module")
+      return self.symbol_table().lookup_addr(self, name, section, module, use_symbols)
+    else:
+      raise TypeError("lookup: primary argument should be an integer (i.e. an address) or a string (i.e. a symbol name)")
 
 class SymbolsModification(obj.ProfileModification):
   before = ["WindowsObjectClasses"]
@@ -468,45 +714,82 @@ class SymbolsModification(obj.ProfileModification):
 
 class Symbols(commands.Command):
   """
-  Symbols objects are used to resolve addresses (e.g. functions, methods, etc.) using 
-  Microsoft's debugging symbols (i.e. PDB files). Name resolution is performed (via the
-   lookup method) relative to a given processes address space.
+  Symbols objects are used to resolve addresses (e.g. functions, methods, etc.) typically 
+  using Microsoft's debugging symbols (i.e. PDB files). Name resolution is performed (via 
+  the lookup method) relative to a given processes address space.
 
-  When pdbparse is installed, addresses can resolve to names with the format:
+  When use_symbols is specified, addresses can resolve to names with the format:
 
-      module.pdb!name+0x0FF
+      module.pdb/section!name+0x0FF
 
-  When pdbparse is *not* installed, we failover to using export symbols from the owning 
+  When use_symbols is *not* specified, we use export symbols from the owning 
   module. In which case, addresses resolve to names with the format:
 
-      ????/module!name+0x0FF
+      module/????!name+0x0FF
 
   Here ???? indicates that debugging symbols could not be consulted during the name resolution 
-  process.
+  process (and so there is no section name).
 
-  When names can not be resolved, they resolve to UNKNOWN. The null address resolves 
-  to '-'.
+  When names can not be resolved, they resolve to UNKNOWN. The null address resolves to '-'.
+
+  NOTE: before using this plugin, it is necessary to first ensure that the symbols table (an 
+    SQLite3 DB) has been built. Use the build_symbols option for this purpose.
   """
 
   def __init__(self, config, *args, **kwargs):
     commands.Command.__init__(self, config, *args, **kwargs)
-    config.add_option("SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Use symbol servers to resolve process addresses to module names")
+    config.add_option("BUILD_SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Build symbol table information")
+    config.add_option("USE_SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Use symbol servers to resolve process addresses to module names")
 
     self.kdbg = tasks.get_kdbg(utils.load_as(config))
-    self.use_symbols = getattr(config, 'SYMBOLS', False)
-    if self.use_symbols and not pdbparse_installed:
-      debug.error("pdbparse (>= 1.1 [r104]) needs to be installed in order to use --symbols")
+    self.build_symbols = getattr(config, 'BUILD_SYMBOLS', False)
+    self.use_symbols = getattr(config, 'USE_SYMBOLS', False)
 
   def render_text(self, outfd, data):
     self.table_header(outfd, [
       ('Process ID', '<16'),
       ('Module', '<16'),
-      ("Function Address", '<16'),
-      ("Function Name", "<")
+      ('Section', '<16'),
+      ("Symbol Address", '<16'),
+      ("Symbol Name", "<")
     ])
+    parser = NameParser()
     for eproc in self.kdbg.processes():
       pid = int(eproc.UniqueProcessId)
-      sym_obj = eproc.symbol_table(use_symbols=self.use_symbols)
-      for func_addr, sym in sym_obj.sym_table[pid].items():
-        func_name = eproc.lookup(func_addr, use_symbols=self.use_symbols)
-        self.table_row(outfd, pid, sym.module_name, "{0:#010x}".format(func_addr), func_name)
+      eproc_addr = int(eproc.v())
+      sym_obj = eproc.symbol_table(build_symbols=self.build_symbols)
+      db = sym_obj.get_cursor()
+
+      if self.use_symbols:
+        sql_query = """SELECT module.name, symbol.section, base.addr + rva, symbol.name 
+          FROM volatility.process AS process
+            INNER JOIN volatility.base AS base ON process.id = base.process_id
+            INNER JOIN module ON module.id = base.module_id
+            INNER JOIN mod_pdb ON module.id = mod_pdb.module_id
+            INNER JOIN pdb ON pdb.id = mod_pdb.pdb_id
+            INNER JOIN symbol ON pdb.id = symbol.pdb_id
+          WHERE eproc = ?
+          ORDER BY base.addr + rva ASC
+        """
+      else:
+        sql_query = """SELECT module.name, export.ordinal, base.addr + rva, export.name
+          FROM volatility.process AS process
+            INNER JOIN volatility.base AS base ON process.id = base.process_id
+            INNER JOIN module ON module.id = base.module_id
+            INNER JOIN export ON module.id = export.module_id
+          WHERE eproc = ?
+          ORDER BY base.addr + rva ASC
+        """
+
+      for module, section_or_ordinal, sym_addr, raw_sym_name in db.execute(sql_query, (eproc_addr,)):
+        sym_name = parser.undecorate(raw_sym_name)[0]
+        if sym_name == "?":
+          sym_name = raw_sym_name
+        if self.use_symbols:
+          section = section_or_ordinal
+        else:
+          section = "????"
+          if sym_name == "":
+            sym_name = str(section_or_ordinal)
+        self.table_row(outfd, pid, module, section, "{0:#010x}".format(sym_addr), sym_name)
+        row = db.fetchone()

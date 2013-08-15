@@ -45,21 +45,36 @@ CURRENT LIMITATIONS: exportfile.py should work with Volatility 2.0 whilst
 Other Plugins
 =============
 
-  symbols.py - this plugin is designed to resolve Windows addresses to the nearest 
-    function/method name within a symbol table. Including this plugin will ensure 
-    that _EPROCESS object classes are injected with a symbol_table and lookup method.
+  symbols.py - this plugin is designed to resolve:
+      * Windows addresses to the nearest function/method name within a symbol table
+      * symbol names to addresses.
+    Including this plugin will ensure that _EPROCESS object classes are injected with 
+    a symbol_table and lookup method.
 
-    When injected methods are called with use_symbols True, symbol tables are built 
-    using Microsoft's debugging symbol information. The symbol PDB files are downloaded 
-    and cached within Volatility's caching directories. Brendan Dolan-Gavitt's pdbparse 
-    is used here.
+    When symbols_table is called with build_symbols True, SQLite DB symbol tables 
+    are built (these include Microsoft's debugging symbol information). The symbol PDB 
+    files are downloaded and, after processing, their contents are inserted into the 
+    underlying SQLite DB (which is located within Volatility's caching directories). 
+    Brendan Dolan-Gavitt's pdbparse is used here.
 
-    If use_symbols is False or no symbol information is available, then module 
-    exports information are used to populate the symbols tables.
+    When lookup is called with use_symbols True, then Microsoft's debugging symbol 
+    information is used during resolution. Otherwise, module exports information is 
+    used for resolution.
 
     Example usage (from a volshell command prompt):
 
-      volshell> self.proc.lookup(addr, use_symbols=True)
+      # Case 1: SQLite Symbols DB not built:
+      volshell> self.proc.symbol_tables(build_symbols=True)
+
+      # Case 2: SQLite Symbols DB already built:
+      volshell> self.proc.symbol_tables()
+
+      # Example queries:
+      volshell> self.proc.lookup(0xb25fc838)
+      'sysaudio.sys/PAGE!CClockInstance::ClockGetCorrelatedPhysicalTime'
+
+      volshell> self.proc.lookup("kernel32/.data!__security_cookie")
+      [ 0x???????? ]
 
     NOTE: due to a bug in pdbparse's src/undname.c code, it is currently necessary to 
       hand patch this file prior building pdbparse. For more details, see:
