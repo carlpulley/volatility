@@ -792,4 +792,3 @@ class Symbols(commands.Command):
           if sym_name == "":
             sym_name = str(section_or_ordinal)
         self.table_row(outfd, pid, module, section, "{0:#010x}".format(sym_addr), sym_name)
-        row = db.fetchone()
