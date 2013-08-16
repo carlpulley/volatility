@@ -553,6 +553,13 @@ class SymbolTable(object):
         # the types stream in mammoth PDB files
         pdb = pdbparse.parse(pdbname, fast_load=True)
         pdb.STREAM_DBI.load()
+        # As pdbparse doesn't add STREAM_FPO_STRINGS to parent, do it manually
+        if pdb.STREAM_DBI.DBIDbgHeader.snNewFPO != -1:
+          pdb.add_supported_stream("STREAM_FPO_STRINGS", pdb.STREAM_DBI.DBIDbgHeader.snNewFPO+1, pdbparse.PDBFPOStrings)
+      except AttributeError:
+        pass
+
+      try:
         pdb._update_names()
         pdb.STREAM_GSYM = pdb.STREAM_GSYM.reload()
         pdb.STREAM_GSYM.load()
@@ -572,7 +579,9 @@ class SymbolTable(object):
         pdb.STREAM_FPO.load()
         pdb.STREAM_FPO_NEW = pdb.STREAM_FPO_NEW.reload()
         pdb.STREAM_FPO_NEW.load()
-        pdb.STREAM_FPO_NEW.load2() # FPOv2 command strings
+        pdb.STREAM_FPO_STRINGS = pdb.STREAM_FPO_STRINGS.reload()
+        pdb.STREAM_FPO_STRINGS.load()
+        pdb.STREAM_FPO_NEW.load2() # inject program strings
       except AttributeError:
         pass
 
@@ -662,7 +671,7 @@ class SymbolTable(object):
         "saved_regs": int(fpo.cbSavedRegs), 
         "max_stack": int(fpo.maxStack), 
         "flags": flags_to_int(fpo.flags),
-        "program_string": str(fpo.ProgramStringOffset) # FIXME:
+        "program_string": str(fpo.ProgramString)
       })
 
   lastprog = None
@@ -760,7 +769,7 @@ class SymbolsEPROCESS(windows._EPROCESS):
 
     When a name is given, resolve to the matching symbol name within this processes symbol 
     table and return matching addresses. Symbols/names may be specified using a string 
-    matching the format ('%' can be used for simple regular expression pattern matching):
+    matching the format (N.B. '%' can be used as a wild card):
 
       MODULE/SECTION!NAME
 
