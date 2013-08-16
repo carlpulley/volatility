@@ -364,32 +364,58 @@ class SymbolTable(object):
 
     # Locate the module's symbol range our address may reside in
     if use_symbols:
+      db.execute("""SELECT MAX(rva)
+        FROM mod_pdb
+          INNER JOIN pdb ON mod_pdb.pdb_id = pdb.id
+          INNER JOIN symbol ON pdb.id = symbol.pdb_id
+        WHERE module_id = :module_id 
+          AND rva + :module_base <= :addr
+      """, { "module_id": module_id, "module_base": module_base, "addr": addr })
+      row = db.fetchall()
+      if len(row) == 0:
+        return "UNKNOWN"
+      assert(len(row) == 1)
+      max_rva = row[0][0]
+      if max_rva == None:
+        return "{0}/!????{1:+#x}".format(module_name, addr - module_base)
+
       db.execute("""SELECT section, name, :addr - rva - :module_base
         FROM mod_pdb
           INNER JOIN pdb ON mod_pdb.pdb_id = pdb.id
           INNER JOIN symbol ON pdb.id = symbol.pdb_id
         WHERE module_id = :module_id 
-          AND rva IN (SELECT MAX(rva) FROM symbol WHERE module_id = :module_id AND rva + :module_base <= :addr)
+          AND rva = :max_rva
         GROUP BY section, name, :addr - rva - :module_base 
-      """, { "module_id": module_id, "module_base": module_base, "addr": addr })
+      """, { "module_id": module_id, "module_base": module_base, "addr": addr, "max_rva": max_rva })
       row = db.fetchall()
-      if len(row) == 0:
-        return "UNKNOWN"
+      assert(len(row) > 0)
       if len(row) > 1:
         ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
       section_name, func_name, diff = row[0]
       func_name = str(self.parser.undecorate(str(func_name))[0])
     else:
       section_name = "????"
-      db.execute("""SELECT ordinal, name, :addr - rva - :module_base
+      db.execute("""SELECT MAX(rva)
         FROM export 
         WHERE module_id = :module_id 
-          AND rva IN (SELECT MAX(rva) FROM export WHERE module_id = :module_id AND rva + :module_base <= :addr)
-        GROUP BY ordinal, name, :addr - rva - :module_base 
+          AND rva + :module_base <= :addr
       """, { "module_id": module_id, "module_base": module_base, "addr": addr })
       row = db.fetchall()
       if len(row) == 0:
         return "UNKNOWN"
+      assert(len(row) == 1)
+      max_rva = row[0][0]
+      if max_rva == None:
+        return "{0}/!????{1:+#x}".format(module_name, addr - module_base)
+
+      db.execute("""SELECT ordinal, name, :addr - rva - :module_base
+        FROM export 
+        WHERE module_id = :module_id 
+          AND rva = :max_rva
+        GROUP BY ordinal, name, :addr - rva - :module_base 
+      """, { "module_id": module_id, "module_base": module_base, "addr": addr, "max_rva": max_rva })
+      row = db.fetchall()
+      assert(len(row) > 0)
       if len(row) > 1:
         ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
       ordinal, func_name, diff = row[0]
