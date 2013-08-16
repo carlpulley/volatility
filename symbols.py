@@ -343,16 +343,19 @@ class SymbolTable(object):
 
   def lookup_name(self, eproc, addr, use_symbols):
     db = self.get_cursor()
+    eproc_addr = int(eproc.v())
+    ambiguity = ""
 
     # Locate the module our address may reside in
     db.execute("""SELECT module.id, module.name, base.addr
       FROM volatility.process AS process
         INNER JOIN volatility.base AS base ON base.process_id = process.id 
         INNER JOIN module ON base.module_id = module.id 
-      WHERE base.addr <= :addr 
+      WHERE process.eproc = :eproc
+        AND base.addr <= :addr 
         AND :addr < base.addr + module.mlimit
       GROUP BY module.id, module.name, base.addr
-    """, { "addr": addr })
+    """, { "eproc": eproc_addr, "addr": addr })
     row = db.fetchall()
     if len(row) == 0:
       return "UNKNOWN"
@@ -372,7 +375,8 @@ class SymbolTable(object):
       row = db.fetchall()
       if len(row) == 0:
         return "UNKNOWN"
-      assert(len(row) == 1)
+      if len(row) > 1:
+        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
       section_name, func_name, diff = row[0]
       func_name = str(self.parser.undecorate(str(func_name))[0])
     else:
@@ -386,7 +390,8 @@ class SymbolTable(object):
       row = db.fetchall()
       if len(row) == 0:
         return "UNKNOWN"
-      assert(len(row) == 1)
+      if len(row) > 1:
+        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
       ordinal, func_name, diff = row[0]
       if func_name == "":
         func_name = str(ordinal or '')
@@ -398,7 +403,7 @@ class SymbolTable(object):
     else:
       diff = "{0:+#x}".format(diff)
 
-    return "{0}/{1}!{2}{3}".format(module_name, section_name, func_name, diff)
+    return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_name, func_name, diff)
 
   # TODO: implement mapping from name to decorated form?
   def lookup_addr(self, eproc, name, section, module, use_symbols):
@@ -783,7 +788,9 @@ class SymbolsEPROCESS(windows._EPROCESS):
     If use_symbols is True, then resolving occurs using Microsoft's debugging symbol information.
     Otherwise, resolving occurs using the module exports information.
     """
-    if type(addr_or_name) == int or type(addr_or_name) == long:
+    if addr_or_name == None:
+      return "-"
+    elif type(addr_or_name) == int or type(addr_or_name) == long:
       return self.symbol_table().lookup_name(self, int(addr_or_name), use_symbols)
     elif type(addr_or_name) == str:
       pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.%]"))

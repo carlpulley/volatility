@@ -602,7 +602,7 @@ class ExportStack(threads.Threads):
 
     config.add_option('UNWIND', default = DEFAULT_UNWIND, help = 'List of frame unwinding strategies (comma-separated)', action = 'store', type = 'str')
     config.add_option('LISTUNWINDS', default = False, help = 'List all known frame unwinding strategies', action = 'store_true')
-    config.add_option("SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Use symbol servers to resolve process addresses to module names")
+    config.add_option("SYMBOLS", default = False, action = 'store_true', cache_invalidator = False, help = "Use symbol servers to resolve process addresses to module names (we assume symbol tables have already been built)")
 
     stack_registry = registry.get_plugin_classes(StackTop)
 
