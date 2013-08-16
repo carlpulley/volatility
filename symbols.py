@@ -65,6 +65,10 @@ REFERENCES:
 """
 
 try:
+  import construct
+except ImportError:
+  debug.error("construct (a pdbparse dependency) needs to be installed in order to use the symbols plugin/code")
+try:
   import pdbparse
   import pdbparse.peinfo
   from pdbparse.undecorate import undecorate as msvc_undecorate
@@ -584,6 +588,9 @@ class SymbolTable(object):
         pdb.STREAM_FPO_NEW.load2() # inject program strings
       except AttributeError:
         pass
+      except construct.adapters.ConstError as err:
+        # TODO: fix actual PDB parsing failure issue!
+        debug.warning("Ignoring PDB parsing failure of {0}/{1}: {2}".format(guid.upper(), filename, err.message))
 
       db.execute("""SELECT pdb.id 
         FROM mod_pdb
