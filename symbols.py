@@ -24,6 +24,8 @@
 """
 This code is designed to resolve addresses or symbol names. 
 
+Use --build_symbols to build the *initial* SQLite database for the current profile.
+
 When the --use_symbols option is specified, then Microsoft's debugging symbol 
 information is used to perform lookups. The symbol PDB files are downloaded and 
 processed into SQLite3 DB entries that are saved within Volatility's caching 
@@ -175,10 +177,14 @@ class SymbolTable(object):
     ....................
     :                  :
     : process *---------* module *-------* pdb -------* symbol
-    :             |    :    |        |
-    :            base  :    *     mod_pdb
-    ....................  export
-    In-memory tables
+    :             |    :    |        |      |
+    :            base  :    *     mod_pdb   *
+    ....................  export          frame
+    In-memory tables                        ^
+                                            |
+                                        +---+---+
+                                        |       |
+                                       fpo    fpov2
     """
 
     db.execute("""CREATE TABLE IF NOT EXISTS module (
@@ -231,6 +237,33 @@ class SymbolTable(object):
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS symbol_name ON symbol(section, name)")
     db.execute("CREATE INDEX IF NOT EXISTS symbol_addr ON symbol(rva)")
+
+    # Single table inheritance usage:
+    #
+    # table_name == "fpo":
+    #   NULL entries: max_stack; flags; program_string
+    #   non-NULL entries: frame; has_seh; use_bp
+    # table_name == "fpov2":
+    #   NULL entries: frame; has_seh; use_bp
+    #   non-NULL entries: max_stack; flags; program_string
+    db.execute("""CREATE TABLE IF NOT EXISTS frame (
+      id INTEGER PRIMARY KEY, 
+      pdb_id INTEGER NOT NULL, 
+      table_name TEXT NOT NULL,
+      off_start INTEGER NOT NULL,
+      proc_size INTEGER NOT NULL,
+      locals INTEGER NOT NULL,
+      params INTEGER NOT NULL,
+      prolog INTEGER NOT NULL,
+      saved_regs INTEGER NOT NULL,
+      frame TEXT,
+      has_seh INTEGER,
+      use_bp INTEGER,
+      max_stack INTEGER,
+      flags INTEGER,
+      program_string TEXT,
+      FOREIGN KEY(pdb_id) REFERENCES pdb(id)
+    )""")
 
     db.execute("""CREATE TABLE IF NOT EXISTS volatility.process (
       id INTEGER PRIMARY KEY, 
@@ -376,9 +409,9 @@ class SymbolTable(object):
             INNER JOIN module ON mod_pdb.module_id = module.id
             INNER JOIN volatility.base AS base ON base.module_id = module.id 
             INNER JOIN volatility.process AS process ON base.process_id = process.id 
-          WHERE section = :section 
-            AND module.name = :module
-            AND symbol.name = :name 
+          WHERE section LIKE :section 
+            AND module.name LIKE :module
+            AND symbol.name LIKE :name 
             AND process.eproc = :eproc
         """
         sql_vars = { "eproc": int(eproc.v()), "name": name, "section": section, "module": module }
@@ -390,8 +423,8 @@ class SymbolTable(object):
             INNER JOIN module ON mod_pdb.module_id = module.id
             INNER JOIN volatility.base AS base ON base.module_id = module.id 
             INNER JOIN volatility.process AS process ON base.process_id = process.id 
-          WHERE module.name = :module
-            AND symbol.name = :name 
+          WHERE module.name LIKE :module
+            AND symbol.name LIKE :name 
             AND process.eproc = :eproc
         """
         sql_vars = { "eproc": int(eproc.v()), "name": name, "module": module }
@@ -403,8 +436,8 @@ class SymbolTable(object):
             INNER JOIN module ON mod_pdb.module_id = module.id
             INNER JOIN volatility.base AS base ON base.module_id = module.id 
             INNER JOIN volatility.process AS process ON base.process_id = process.id 
-          WHERE section = :section 
-            AND symbol.name = :name 
+          WHERE section LIKE :section 
+            AND symbol.name LIKE :name 
             AND process.eproc = :eproc
         """
         sql_vars = { "eproc": int(eproc.v()), "name": name, "section": section }
@@ -416,7 +449,7 @@ class SymbolTable(object):
             INNER JOIN module ON mod_pdb.module_id = module.id
             INNER JOIN volatility.base AS base ON base.module_id = module.id 
             INNER JOIN volatility.process AS process ON base.process_id = process.id 
-          WHERE symbol.name = :name 
+          WHERE symbol.name LIKE :name 
             AND process.eproc = :eproc
         """
         sql_vars = { "eproc": int(eproc.v()), "name": name }
@@ -427,8 +460,8 @@ class SymbolTable(object):
             INNER JOIN module ON export.module_id = module.id 
             INNER JOIN volatility.base AS base ON base.module_id = module.id 
             INNER JOIN volatility.process AS process ON base.process_id = process.id 
-          WHERE export.name = :name 
-            AND module.name = :module
+          WHERE export.name LIKE :name 
+            AND module.name LIKE :module
             AND process.eproc = :eproc
         """
         sql_vars = { "eproc": int(eproc.v()), "name": name, "module": module }
@@ -438,7 +471,7 @@ class SymbolTable(object):
             INNER JOIN module ON export.module_id = module.id 
             INNER JOIN volatility.base AS base ON base.module_id = module.id 
             INNER JOIN volatility.process AS process ON base.process_id = process.id 
-          WHERE export.name = :name 
+          WHERE export.name LIKE :name 
             AND process.eproc = :eproc
         """
         sql_vars = { "eproc": int(eproc.v()), "name": name }
@@ -525,13 +558,6 @@ class SymbolTable(object):
         pdb.STREAM_GSYM.load()
         pdb.STREAM_SECT_HDR = pdb.STREAM_SECT_HDR.reload()
         pdb.STREAM_SECT_HDR.load()
-        ## TODO:
-        ## Ensure FPO data is loaded
-        #pdb.STREAM_FPO = pdb.STREAM_FPO.reload()
-        #pdb.STREAM_FPO.load()
-        #pdb.STREAM_FPO_NEW = pdb.STREAM_FPO_NEW.reload()
-        #pdb.STREAM_FPO_NEW.load()
-        #pdb.STREAM_FPO_NEW.load2()
         # These are the dicey ones
         pdb.STREAM_OMAP_FROM_SRC = pdb.STREAM_OMAP_FROM_SRC.reload()
         pdb.STREAM_OMAP_FROM_SRC.load()
@@ -541,56 +567,208 @@ class SymbolTable(object):
         pass
     
       try:
-        sects = pdb.STREAM_SECT_HDR_ORIG.sections
-        omap = pdb.STREAM_OMAP_FROM_SRC
+        # Ensure FPO streams are loaded
+        pdb.STREAM_FPO = pdb.STREAM_FPO.reload()
+        pdb.STREAM_FPO.load()
+        pdb.STREAM_FPO_NEW = pdb.STREAM_FPO_NEW.reload()
+        pdb.STREAM_FPO_NEW.load()
+        pdb.STREAM_FPO_NEW.load2() # FPOv2 command strings
       except AttributeError:
-        # In this case there is no OMAP, so we use the given section
-        # headers and use the identity function for omap.remap
-        sects = pdb.STREAM_SECT_HDR.sections
-        omap = DummyOmap()
-      gsyms = pdb.STREAM_GSYM
-    
-      for sym in gsyms.globals:
-        if not hasattr(sym, 'offset'): 
-          continue
-        off = sym.offset
-        try:
-          virt_base = sects[sym.segment-1].VirtualAddress
-          section = sects[sym.segment-1].Name
-        except IndexError:
-          continue
-    
-        sym_rva = omap.remap(off+virt_base)
-  
-        db.execute("""SELECT * 
-          FROM mod_pdb
-            INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
-            INNER JOIN symbol ON symbol.pdb_id=pdb.id 
-          WHERE module_id=? 
-            AND guid=? 
-            AND file=? 
-            AND rva=? 
-            AND section=? 
-            AND name=?
-        """, (module_id, int(sym_rva),  str(section).rstrip('\0'), str(sym.name).rstrip('\0'), str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-        row = db.fetchone()
-        if row == None:
-          # We've not previously seen this function symbol
-          db.execute("""SELECT pdb.id 
-            FROM mod_pdb
-              INNER JOIN pdb ON pdb_id=pdb.id 
-            WHERE module_id=? 
-              AND guid=? 
-              AND file=?
-          """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-          row = db.fetchone()
-          assert(row != None)
-          pdb_id = row[0]
-          db.execute("INSERT INTO symbol(pdb_id, type, section, name, rva) VALUES (?, ?, ?, ?, ?)", (pdb_id, int(sym.symtype), str(section).rstrip('\0'), str(sym.name).rstrip('\0'), int(sym_rva)))
-  
+        pass
+
+      self.process_gsyms(db, pdb, module_id, guid, filename)
+      try:
+        self.process_fpo(db, pdb, module_id, guid, filename)
+      except AttributeError:
+        pass
+      try:
+        self.process_fpov2(db, pdb, module_id, guid, filename)
+      except AttributeError:
+        pass
+
       shutil.rmtree(saved_mod_path)
       debug.info("Removed directory {0} and its contents".format(saved_mod_path))
       self._sym_db_conn.commit()
+
+  def process_gsyms(self, db, pdb, module_id, guid, filename):
+    try:
+      sects = pdb.STREAM_SECT_HDR_ORIG.sections
+      omap = pdb.STREAM_OMAP_FROM_SRC
+    except AttributeError:
+      # In this case there is no OMAP, so we use the given section
+      # headers and use the identity function for omap.remap
+      sects = pdb.STREAM_SECT_HDR.sections
+      omap = DummyOmap()
+    gsyms = pdb.STREAM_GSYM
+    
+    for sym in gsyms.globals:
+      if not hasattr(sym, 'offset'): 
+        continue
+      off = sym.offset
+      try:
+        virt_base = sects[sym.segment-1].VirtualAddress
+        section = sects[sym.segment-1].Name
+      except IndexError:
+        continue
+    
+      sym_rva = omap.remap(off+virt_base)
+  
+      db.execute("""SELECT * 
+        FROM mod_pdb
+          INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
+          INNER JOIN symbol ON symbol.pdb_id=pdb.id 
+        WHERE module_id=? 
+          AND guid=? 
+          AND file=? 
+          AND rva=? 
+          AND section=? 
+          AND name=?
+      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0'), int(sym_rva),  str(section).rstrip('\0'), str(sym.name).rstrip('\0')))
+      row = db.fetchone()
+      if row == None:
+        # We've not previously seen this function symbol
+        db.execute("""SELECT pdb.id 
+          FROM mod_pdb
+            INNER JOIN pdb ON pdb_id=pdb.id 
+          WHERE module_id=? 
+            AND guid=? 
+            AND file=?
+        """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+        row = db.fetchone()
+        assert(row != None)
+        pdb_id = row[0]
+        db.execute("INSERT INTO symbol(pdb_id, type, section, name, rva) VALUES (?, ?, ?, ?, ?)", (pdb_id, int(sym.symtype), str(section).rstrip('\0'), str(sym.name).rstrip('\0'), int(sym_rva)))
+
+  def process_fpo(self, db, pdb, module_id, guid, filename):
+    data_stream = pdb.STREAM_FPO
+    for fpo in data_stream.fpo:
+      db.execute("""SELECT * 
+        FROM mod_pdb
+          INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
+          INNER JOIN frame ON frame.pdb_id=pdb.id 
+        WHERE module_id=:module_id
+          AND guid=:guid
+          AND file=:filename
+          AND off_start=:off_start
+          AND proc_size=:proc_size
+          AND locals=:locals
+          AND params=:params
+          AND prolog=:prolog
+          AND saved_regs=:saved_regs
+          AND frame=:frame
+          AND has_seh=:has_seh
+          AND use_bp=:use_bp
+      """, { 
+        "module_id": module_id, 
+        "guid": str(guid.upper()).rstrip('\0'), 
+        "filename": str(filename).rstrip('\0'), 
+        "off_start": int(fpo.ulOffStart), 
+        "proc_size": int(fpo.cbProcSize), 
+        "locals": int(fpo.cdwLocals), 
+        "params": int(fpo.cdwParams), 
+        "prolog": int(fpo.cbProlog), 
+        "saved_regs": int(fpo.cbRegs), 
+        "frame": int(fpo.cbFrame), 
+        "has_seh": int(fpo.fHasSEH), 
+        "use_bp": int(fpo.fUseBP) 
+      })
+
+      row = db.fetchone()
+      if row == None:
+        # We've not previously seen this FPO data
+        db.execute("""SELECT pdb.id 
+          FROM mod_pdb
+            INNER JOIN pdb ON pdb_id=pdb.id 
+          WHERE module_id=? 
+            AND guid=? 
+            AND file=?
+        """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+
+        row = db.fetchone()
+        assert(row != None)
+        pdb_id = row[0]
+
+        db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, frame, has_seh, use_bp) 
+          VALUES (:pdb_id, 'fpo', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :frame, :has_seh, :use_bp)
+        """, { 
+          "pdb_id": pdb_id, 
+          "off_start": int(fpo.ulOffStart), 
+          "proc_size": int(fpo.cbProcSize), 
+          "locals": int(fpo.cdwLocals), 
+          "params": int(fpo.cdwParams), 
+          "prolog": int(fpo.cbProlog), 
+          "saved_regs": int(fpo.cbRegs), 
+          "frame": int(fpo.cbFrame), 
+          "has_seh": int(fpo.fHasSEH), 
+          "use_bp": int(fpo.fUseBP) 
+        })
+
+  def process_fpov2(self, db, pdb, module_id, guid, filename):
+    def flags_to_int(flags):
+      return 1*int(flags.SEH) + 2*int(flags.CPPEH) + 4*int(flags.fnStart)
+
+    data_stream = pdb.STREAM_FPO_NEW
+    for fpo in data_stream.fpo:
+      db.execute("""SELECT * 
+        FROM mod_pdb
+          INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
+          INNER JOIN frame ON frame.pdb_id=pdb.id 
+        WHERE module_id=:module_id
+          AND guid=:guid
+          AND file=:filename
+          AND off_start=:off_start
+          AND proc_size=:proc_size
+          AND locals=:locals
+          AND params=:params
+          AND prolog=:prolog
+          AND saved_regs=:saved_regs
+          AND max_stack=:max_stack
+          AND flags=:flags
+          AND program_string=:program_string
+      """, { 
+        "module_id": module_id, 
+        "guid": str(guid.upper()).rstrip('\0'), 
+        "filename": str(filename).rstrip('\0'), 
+        "off_start": int(fpo.ulOffStart), 
+        "proc_size": int(fpo.cbProcSize), 
+        "locals": int(fpo.cbLocals), 
+        "params": int(fpo.cbParams), 
+        "prolog": int(fpo.cbProlog), 
+        "saved_regs": int(fpo.cbSavedRegs), 
+        "max_stack": int(fpo.maxStack), 
+        "flags": flags_to_int(fpo.flags),
+        "program_string": str(fpo.ProgramStringOffset) # FIXME:
+      })
+
+      row = db.fetchone()
+      if row == None:
+        # We've not previously seen this FPO data
+        db.execute("""SELECT pdb.id 
+          FROM mod_pdb
+            INNER JOIN pdb ON pdb_id=pdb.id 
+          WHERE module_id=? 
+            AND guid=? 
+            AND file=?
+        """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+
+        row = db.fetchone()
+        assert(row != None)
+        pdb_id = row[0]
+
+        db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, max_stack, flags, program_string) 
+          VALUES (:pdb_id, 'fpov2', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :max_stack, :flags, :program_string)
+        """, { 
+          "pdb_id": pdb_id, 
+          "off_start": int(fpo.ulOffStart), 
+          "proc_size": int(fpo.cbProcSize), 
+          "locals": int(fpo.cbLocals), 
+          "params": int(fpo.cbParams), 
+          "prolog": int(fpo.cbProlog), 
+          "saved_regs": int(fpo.cbSavedRegs), 
+          "max_stack": int(fpo.maxStack), 
+          "flags": flags_to_int(fpo.flags),
+          "program_string": str(fpo.ProgramStringOffset) # FIXME:
+        })
 
   lastprog = None
   def progress(self, blocks, blocksz, totalsz):
@@ -674,10 +852,20 @@ class SymbolsEPROCESS(windows._EPROCESS):
   def lookup(self, addr_or_name, use_symbols=True):
     """
     When an address is given, resolve to the nearest symbol name within this processes 
-    symbol table. 
+    symbol table. If use_symbols is specified, addresses can resolve to names with the 
+    format:
+
+      module.pdb/section!name+0x0FF
+
+    If use_symbols is *not* specified, addresses resolve to names with the format:
+
+      module/????!name+0x0FF
+
+    Here, ???? indicates that exports are being used (i.e. an unknown section).
 
     When a name is given, resolve to the matching symbol name within this processes symbol 
-    table and return matching addresses. Section names may be specified using the format:
+    table and return matching addresses. Symbols/names may be specified using a string 
+    matching the format ('%' can be used for simple regular expression pattern matching):
 
       MODULE/SECTION!NAME
 
@@ -687,7 +875,7 @@ class SymbolsEPROCESS(windows._EPROCESS):
     if type(addr_or_name) == int or type(addr_or_name) == long:
       return self.symbol_table().lookup_name(self, int(addr_or_name), use_symbols)
     elif type(addr_or_name) == str:
-      pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.]"))
+      pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.%]"))
       mobj = pattern.match(addr_or_name)
       if mobj == None:
         raise ValueError("lookup: symbol name needs to match the format MODULE/SECTION!NAME")
@@ -696,7 +884,7 @@ class SymbolsEPROCESS(windows._EPROCESS):
       module = mobj.group("module")
       return self.symbol_table().lookup_addr(self, name, section, module, use_symbols)
     else:
-      raise TypeError("lookup: primary argument should be an integer (i.e. an address) or a string (i.e. a symbol name)")
+      raise TypeError("lookup: primary argument should be an integer (i.e. an address) or a string (i.e. a symbol name), not of type {0}".format(type(addr_or_name)))
 
 class SymbolsModification(obj.ProfileModification):
   before = ["WindowsObjectClasses"]
@@ -718,22 +906,12 @@ class Symbols(commands.Command):
   using Microsoft's debugging symbols (i.e. PDB files). Name resolution is performed (via 
   the lookup method) relative to a given processes address space.
 
-  When use_symbols is specified, addresses can resolve to names with the format:
+  When --use_symbols is specified, addresses are resolved using Microsoft's debugging symbols.
 
-      module.pdb/section!name+0x0FF
+  When --use_symbols is *not* specified, address resolution uses the module export symbols.
 
-  When use_symbols is *not* specified, we use export symbols from the owning 
-  module. In which case, addresses resolve to names with the format:
-
-      module/????!name+0x0FF
-
-  Here ???? indicates that debugging symbols could not be consulted during the name resolution 
-  process (and so there is no section name).
-
-  When names can not be resolved, they resolve to UNKNOWN. The null address resolves to '-'.
-
-  NOTE: before using this plugin, it is necessary to first ensure that the symbols table (an 
-    SQLite3 DB) has been built. Use the build_symbols option for this purpose.
+  NOTE: before using this plugin, it is necessary to first ensure that the symbols table (i.e. an 
+    SQLite3 DB) has been built. Use the --build_symbols option for this purpose.
   """
 
   def __init__(self, config, *args, **kwargs):
