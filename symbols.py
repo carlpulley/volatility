@@ -357,11 +357,10 @@ class SymbolTable(object):
       if max_rva == None:
         return "{0}/{1}!{2:+#x}".format(module_name, section_pad, addr - module_base)
 
-      db.execute("""SELECT ordinal, name, :addr - rva - :module_base
+      db.execute("""SELECT DISTINCT ordinal, name, :addr - rva - :module_base
         FROM export 
         WHERE module_id = :module_id 
           AND rva = :max_rva
-        GROUP BY ordinal, name, :addr - rva - :module_base 
       """, { "module_id": module_id, "module_base": module_base, "addr": addr, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
@@ -383,14 +382,13 @@ class SymbolTable(object):
     ambiguity = ""
 
     # Locate the module our address may reside in
-    db.execute("""SELECT module.id, module.name, base.addr
+    db.execute("""SELECT DISTINCT module.id, module.name, base.addr
       FROM volatility.process AS process
         INNER JOIN volatility.base AS base ON base.process_id = process.id 
         INNER JOIN module ON base.module_id = module.id 
       WHERE process.eproc = :eproc
         AND base.addr <= :addr 
         AND :addr < base.addr + module.mlimit
-      GROUP BY module.id, module.name, base.addr
     """, { "eproc": eproc_addr, "addr": addr })
     row = db.fetchall()
     if len(row) == 0:
@@ -415,13 +413,12 @@ class SymbolTable(object):
       if max_rva == None:
         return export_lookup(db, module_name, module_id, module_base, "")
 
-      db.execute("""SELECT section, name, :addr - rva - :module_base
+      db.execute("""SELECT DISTINCT section, name, :addr - rva - :module_base
         FROM mod_pdb
           INNER JOIN pdb ON mod_pdb.pdb_id = pdb.id
           INNER JOIN symbol ON pdb.id = symbol.pdb_id
         WHERE module_id = :module_id 
           AND rva = :max_rva
-        GROUP BY section, name, :addr - rva - :module_base 
       """, { "module_id": module_id, "module_base": module_base, "addr": addr, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
@@ -429,15 +426,15 @@ class SymbolTable(object):
         ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
       section_name, func_name, diff = row[0]
       func_name = str(self.parser.undecorate(str(func_name))[0])
+
+      if diff == 0:
+        diff = ""
+      else:
+        diff = "{0:+#x}".format(diff)
+  
+      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_name, func_name, diff)
     else:
       return export_lookup(db, module_name, module_id, module_base, "????")
-
-    if diff == 0:
-      diff = ""
-    else:
-      diff = "{0:+#x}".format(diff)
-
-    return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_name, func_name, diff)
 
   # TODO: implement mapping from name to decorated form?
   def lookup_addr(self, eproc, name, section, module, use_symbols):
