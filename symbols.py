@@ -310,7 +310,7 @@ class SymbolTable(object):
       mod_limit = int(mod.SizeOfImage)
       db.execute("INSERT INTO module(name, mpath, mlimit) VALUES (?, ?, ?)", (mod_name, mod_path, mod_limit))
       self._sym_db_conn.commit()
-      db.execute("SELECT id FROM module WHERE mpath=? AND name=?", (mod_path, mod_name))
+      db.execute("SELECT LAST_INSERT_ROWID() FROM module")
       row = db.fetchone()
 
     return row[0]
@@ -322,7 +322,7 @@ class SymbolTable(object):
     if row == None:
       db.execute("INSERT INTO volatility.process(eproc) VALUES (?)", (eproc_addr,))
       self._sym_db_conn.commit()
-      db.execute("SELECT id FROM volatility.process WHERE eproc=?", (eproc_addr,))
+      db.execute("SELECT LAST_INSERT_ROWID() FROM volatility.process")
       row = db.fetchone()
 
     return row[0]
@@ -734,7 +734,7 @@ class SymbolTable(object):
     row = db.fetchone()
     if row == None:
       db.execute("INSERT INTO pdb(guid, file) VALUES (?, ?)", (str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-      db.execute("SELECT id FROM pdb WHERE guid=? AND file=?", (str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+      db.execute("SELECT LAST_INSERT_ROWID() FROM pdb")
       row = db.fetchone()
     pdb_id = row[0]
     db.execute("SELECT * FROM mod_pdb WHERE module_id=? AND pdb_id=?", (module_id, pdb_id))
