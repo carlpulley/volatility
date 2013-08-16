@@ -613,55 +613,37 @@ class SymbolTable(object):
     
       sym_rva = omap.remap(off+virt_base)
   
-      db.execute("""SELECT * 
+      db.execute("""SELECT pdb.id 
         FROM mod_pdb
-          INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
-          INNER JOIN symbol ON symbol.pdb_id=pdb.id 
+          INNER JOIN pdb ON pdb_id=pdb.id 
         WHERE module_id=? 
           AND guid=? 
-          AND file=? 
-          AND rva=? 
-          AND section=? 
-          AND name=?
-      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0'), int(sym_rva),  str(section).rstrip('\0'), str(sym.name).rstrip('\0')))
+          AND file=?
+      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
       row = db.fetchone()
-      if row == None:
-        # We've not previously seen this function symbol
-        db.execute("""SELECT pdb.id 
-          FROM mod_pdb
-            INNER JOIN pdb ON pdb_id=pdb.id 
-          WHERE module_id=? 
-            AND guid=? 
-            AND file=?
-        """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-        row = db.fetchone()
-        assert(row != None)
-        pdb_id = row[0]
-        db.execute("INSERT INTO symbol(pdb_id, type, section, name, rva) VALUES (?, ?, ?, ?, ?)", (pdb_id, int(sym.symtype), str(section).rstrip('\0'), str(sym.name).rstrip('\0'), int(sym_rva)))
+      assert(row != None)
+      pdb_id = row[0]
+      db.execute("INSERT INTO symbol(pdb_id, type, section, name, rva) VALUES (?, ?, ?, ?, ?)", (pdb_id, int(sym.symtype), str(section).rstrip('\0'), str(sym.name).rstrip('\0'), int(sym_rva)))
 
   def process_fpo(self, db, pdb, module_id, guid, filename):
     data_stream = pdb.STREAM_FPO
     for fpo in data_stream.fpo:
-      db.execute("""SELECT * 
+      db.execute("""SELECT pdb.id 
         FROM mod_pdb
-          INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
-          INNER JOIN frame ON frame.pdb_id=pdb.id 
-        WHERE module_id=:module_id
-          AND guid=:guid
-          AND file=:filename
-          AND off_start=:off_start
-          AND proc_size=:proc_size
-          AND locals=:locals
-          AND params=:params
-          AND prolog=:prolog
-          AND saved_regs=:saved_regs
-          AND frame=:frame
-          AND has_seh=:has_seh
-          AND use_bp=:use_bp
+          INNER JOIN pdb ON pdb_id=pdb.id 
+        WHERE module_id=? 
+          AND guid=? 
+          AND file=?
+      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+
+      row = db.fetchone()
+      assert(row != None)
+      pdb_id = row[0]
+
+      db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, frame, has_seh, use_bp) 
+        VALUES (:pdb_id, 'fpo', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :frame, :has_seh, :use_bp)
       """, { 
-        "module_id": module_id, 
-        "guid": str(guid.upper()).rstrip('\0'), 
-        "filename": str(filename).rstrip('\0'), 
+        "pdb_id": pdb_id, 
         "off_start": int(fpo.ulOffStart), 
         "proc_size": int(fpo.cbProcSize), 
         "locals": int(fpo.cdwLocals), 
@@ -673,62 +655,28 @@ class SymbolTable(object):
         "use_bp": int(fpo.fUseBP) 
       })
 
-      row = db.fetchone()
-      if row == None:
-        # We've not previously seen this FPO data
-        db.execute("""SELECT pdb.id 
-          FROM mod_pdb
-            INNER JOIN pdb ON pdb_id=pdb.id 
-          WHERE module_id=? 
-            AND guid=? 
-            AND file=?
-        """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-
-        row = db.fetchone()
-        assert(row != None)
-        pdb_id = row[0]
-
-        db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, frame, has_seh, use_bp) 
-          VALUES (:pdb_id, 'fpo', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :frame, :has_seh, :use_bp)
-        """, { 
-          "pdb_id": pdb_id, 
-          "off_start": int(fpo.ulOffStart), 
-          "proc_size": int(fpo.cbProcSize), 
-          "locals": int(fpo.cdwLocals), 
-          "params": int(fpo.cdwParams), 
-          "prolog": int(fpo.cbProlog), 
-          "saved_regs": int(fpo.cbRegs), 
-          "frame": int(fpo.cbFrame), 
-          "has_seh": int(fpo.fHasSEH), 
-          "use_bp": int(fpo.fUseBP) 
-        })
-
   def process_fpov2(self, db, pdb, module_id, guid, filename):
     def flags_to_int(flags):
       return 1*int(flags.SEH) + 2*int(flags.CPPEH) + 4*int(flags.fnStart)
 
     data_stream = pdb.STREAM_FPO_NEW
     for fpo in data_stream.fpo:
-      db.execute("""SELECT * 
+      db.execute("""SELECT pdb.id 
         FROM mod_pdb
-          INNER JOIN pdb ON mod_pdb.pdb_id=pdb.id 
-          INNER JOIN frame ON frame.pdb_id=pdb.id 
-        WHERE module_id=:module_id
-          AND guid=:guid
-          AND file=:filename
-          AND off_start=:off_start
-          AND proc_size=:proc_size
-          AND locals=:locals
-          AND params=:params
-          AND prolog=:prolog
-          AND saved_regs=:saved_regs
-          AND max_stack=:max_stack
-          AND flags=:flags
-          AND program_string=:program_string
+          INNER JOIN pdb ON pdb_id=pdb.id 
+        WHERE module_id=? 
+          AND guid=? 
+          AND file=?
+      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+
+      row = db.fetchone()
+      assert(row != None)
+      pdb_id = row[0]
+
+      db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, max_stack, flags, program_string) 
+        VALUES (:pdb_id, 'fpov2', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :max_stack, :flags, :program_string)
       """, { 
-        "module_id": module_id, 
-        "guid": str(guid.upper()).rstrip('\0'), 
-        "filename": str(filename).rstrip('\0'), 
+        "pdb_id": pdb_id, 
         "off_start": int(fpo.ulOffStart), 
         "proc_size": int(fpo.cbProcSize), 
         "locals": int(fpo.cbLocals), 
@@ -739,36 +687,6 @@ class SymbolTable(object):
         "flags": flags_to_int(fpo.flags),
         "program_string": str(fpo.ProgramStringOffset) # FIXME:
       })
-
-      row = db.fetchone()
-      if row == None:
-        # We've not previously seen this FPO data
-        db.execute("""SELECT pdb.id 
-          FROM mod_pdb
-            INNER JOIN pdb ON pdb_id=pdb.id 
-          WHERE module_id=? 
-            AND guid=? 
-            AND file=?
-        """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-
-        row = db.fetchone()
-        assert(row != None)
-        pdb_id = row[0]
-
-        db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, max_stack, flags, program_string) 
-          VALUES (:pdb_id, 'fpov2', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :max_stack, :flags, :program_string)
-        """, { 
-          "pdb_id": pdb_id, 
-          "off_start": int(fpo.ulOffStart), 
-          "proc_size": int(fpo.cbProcSize), 
-          "locals": int(fpo.cbLocals), 
-          "params": int(fpo.cbParams), 
-          "prolog": int(fpo.cbProlog), 
-          "saved_regs": int(fpo.cbSavedRegs), 
-          "max_stack": int(fpo.maxStack), 
-          "flags": flags_to_int(fpo.flags),
-          "program_string": str(fpo.ProgramStringOffset) # FIXME:
-        })
 
   lastprog = None
   def progress(self, blocks, blocksz, totalsz):
