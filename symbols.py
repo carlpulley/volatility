@@ -576,13 +576,24 @@ class SymbolTable(object):
       except AttributeError:
         pass
 
-      self.process_gsyms(db, pdb, module_id, guid, filename)
+      db.execute("""SELECT pdb.id 
+        FROM mod_pdb
+          INNER JOIN pdb ON pdb_id=pdb.id 
+        WHERE module_id=? 
+          AND guid=? 
+          AND file=?
+      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
+      row = db.fetchone()
+      assert(row != None)
+      pdb_id = row[0]
+
+      self.process_gsyms(db, pdb, pdb_id, module_id, guid, filename)
       try:
-        self.process_fpo(db, pdb, module_id, guid, filename)
+        self.process_fpo(db, pdb, pdb_id, module_id, guid, filename)
       except AttributeError:
         pass
       try:
-        self.process_fpov2(db, pdb, module_id, guid, filename)
+        self.process_fpov2(db, pdb, pdb_id, module_id, guid, filename)
       except AttributeError:
         pass
 
@@ -590,7 +601,7 @@ class SymbolTable(object):
       debug.info("Removed directory {0} and its contents".format(saved_mod_path))
       self._sym_db_conn.commit()
 
-  def process_gsyms(self, db, pdb, module_id, guid, filename):
+  def process_gsyms(self, db, pdb, pdb_id, module_id, guid, filename):
     try:
       sects = pdb.STREAM_SECT_HDR_ORIG.sections
       omap = pdb.STREAM_OMAP_FROM_SRC
@@ -613,33 +624,11 @@ class SymbolTable(object):
     
       sym_rva = omap.remap(off+virt_base)
   
-      db.execute("""SELECT pdb.id 
-        FROM mod_pdb
-          INNER JOIN pdb ON pdb_id=pdb.id 
-        WHERE module_id=? 
-          AND guid=? 
-          AND file=?
-      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-      row = db.fetchone()
-      assert(row != None)
-      pdb_id = row[0]
       db.execute("INSERT INTO symbol(pdb_id, type, section, name, rva) VALUES (?, ?, ?, ?, ?)", (pdb_id, int(sym.symtype), str(section).rstrip('\0'), str(sym.name).rstrip('\0'), int(sym_rva)))
 
-  def process_fpo(self, db, pdb, module_id, guid, filename):
+  def process_fpo(self, db, pdb, pdb_id, module_id, guid, filename):
     data_stream = pdb.STREAM_FPO
     for fpo in data_stream.fpo:
-      db.execute("""SELECT pdb.id 
-        FROM mod_pdb
-          INNER JOIN pdb ON pdb_id=pdb.id 
-        WHERE module_id=? 
-          AND guid=? 
-          AND file=?
-      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-
-      row = db.fetchone()
-      assert(row != None)
-      pdb_id = row[0]
-
       db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, frame, has_seh, use_bp) 
         VALUES (:pdb_id, 'fpo', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :frame, :has_seh, :use_bp)
       """, { 
@@ -655,24 +644,12 @@ class SymbolTable(object):
         "use_bp": int(fpo.fUseBP) 
       })
 
-  def process_fpov2(self, db, pdb, module_id, guid, filename):
+  def process_fpov2(self, db, pdb, pdb_id, module_id, guid, filename):
     def flags_to_int(flags):
       return 1*int(flags.SEH) + 2*int(flags.CPPEH) + 4*int(flags.fnStart)
 
     data_stream = pdb.STREAM_FPO_NEW
     for fpo in data_stream.fpo:
-      db.execute("""SELECT pdb.id 
-        FROM mod_pdb
-          INNER JOIN pdb ON pdb_id=pdb.id 
-        WHERE module_id=? 
-          AND guid=? 
-          AND file=?
-      """, (module_id, str(guid.upper()).rstrip('\0'), str(filename).rstrip('\0')))
-
-      row = db.fetchone()
-      assert(row != None)
-      pdb_id = row[0]
-
       db.execute("""INSERT INTO frame(pdb_id, table_name, off_start, proc_size, locals, params, prolog, saved_regs, max_stack, flags, program_string) 
         VALUES (:pdb_id, 'fpov2', :off_start, :proc_size, :locals, :params, :prolog, :saved_regs, :max_stack, :flags, :program_string)
       """, { 
