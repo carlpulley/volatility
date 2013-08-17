@@ -209,7 +209,8 @@ class SymbolTable(object):
       FOREIGN KEY(module_id) REFERENCES module(id)
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS export_name ON export(name)")
-    db.execute("CREATE INDEX IF NOT EXISTS export_addr ON export(rva)")
+    db.execute("CREATE INDEX IF NOT EXISTS export_rva ON export(rva)")
+    db.execute("CREATE INDEX IF NOT EXISTS export_mod_rva ON export(module_id, rva)")
 
     db.execute("""CREATE TABLE IF NOT EXISTS mod_pdb (
       id INTEGER PRIMARY KEY,  
@@ -218,6 +219,7 @@ class SymbolTable(object):
       FOREIGN KEY(module_id) REFERENCES module(id),
       FOREIGN KEY(pdb_id) REFERENCES pdb(id)
     )""")
+    db.execute("CREATE INDEX IF NOT EXISTS mod_pdb_link ON mod_pdb(module_id, pdb_id)")
 
     db.execute("""CREATE TABLE IF NOT EXISTS pdb (
       id INTEGER PRIMARY KEY,
@@ -227,8 +229,7 @@ class SymbolTable(object):
       downloaded_at TEXT,
       UNIQUE(guid, file, src)
     )""")
-    db.execute("CREATE INDEX IF NOT EXISTS pdb_file ON pdb(file)")
-    db.execute("CREATE INDEX IF NOT EXISTS pdb_guid ON pdb(guid)")
+    db.execute("CREATE INDEX IF NOT EXISTS pdb_file_guid ON pdb(file, guid)")
 
     db.execute("""CREATE TABLE IF NOT EXISTS symbol (
       id INTEGER PRIMARY KEY, 
@@ -240,7 +241,8 @@ class SymbolTable(object):
       FOREIGN KEY(pdb_id) REFERENCES pdb(id)
     )""")
     db.execute("CREATE INDEX IF NOT EXISTS symbol_name ON symbol(section, name)")
-    db.execute("CREATE INDEX IF NOT EXISTS symbol_addr ON symbol(rva)")
+    db.execute("CREATE INDEX IF NOT EXISTS symbol_rva ON symbol(rva)")
+    db.execute("CREATE INDEX IF NOT EXISTS symbol_pdb_rva ON symbol(pdb_id, rva)")
 
     # Single table inheritance usage:
     #
@@ -268,12 +270,14 @@ class SymbolTable(object):
       program_string TEXT,
       FOREIGN KEY(pdb_id) REFERENCES pdb(id)
     )""")
+    db.execute("CREATE INDEX IF NOT EXISTS frame_child ON frame(table_name)")
 
     db.execute("""CREATE TABLE IF NOT EXISTS volatility.process (
       id INTEGER PRIMARY KEY, 
       eproc INTEGER NOT NULL,
       UNIQUE (eproc)
     )""")
+    db.execute("CREATE INDEX IF NOT EXISTS volatility.eproc_addr ON process(eproc)")
 
     db.execute("""CREATE TABLE IF NOT EXISTS volatility.base (
       id INTEGER PRIMARY KEY,  
@@ -283,6 +287,7 @@ class SymbolTable(object):
       FOREIGN KEY(process_id) REFERENCES process(id),
       FOREIGN KEY(module_id) REFERENCES module(id)
     )""")
+    db.execute("CREATE INDEX IF NOT EXISTS volatility.base_link ON base(process_id, module_id)")
 
     self._sym_db_conn.commit()
 
@@ -344,24 +349,31 @@ class SymbolTable(object):
   def lookup_name(self, eproc, addr, use_symbols):
     def export_lookup(db, module_name, module_id, module_base, section_pad):
       ambiguity = ""
+      db.execute("""SELECT rva
+        FROM export 
+        WHERE module_id = :module_id 
+          AND rva <= :addr
+      """, { "module_id": module_id, "addr": addr - module_base })
+      row = db.fetchone()
+      if row == None or row[0] == None:
+        return "{0}/{1}!{2:+#x}".format(module_name, section_pad, addr - module_base)
+      minimal_rva = row[0]
+
       db.execute("""SELECT MAX(rva)
         FROM export 
         WHERE module_id = :module_id 
-          AND rva + :module_base <= :addr
-      """, { "module_id": module_id, "module_base": module_base, "addr": addr })
-      row = db.fetchall()
-      if len(row) == 0:
-        return "UNKNOWN"
-      assert(len(row) == 1)
-      max_rva = row[0][0]
-      if max_rva == None:
-        return "{0}/{1}!{2:+#x}".format(module_name, section_pad, addr - module_base)
+          AND :minimal_rva <= rva
+          AND rva <= :addr
+      """, { "module_id": module_id, "minimal_rva": minimal_rva, "addr": addr - module_base })
+      row = db.fetchone()
+      max_rva = row[0]
+      assert(max_rva != None)
 
-      db.execute("""SELECT DISTINCT ordinal, name, :addr - rva - :module_base
+      db.execute("""SELECT DISTINCT ordinal, name, :addr - rva
         FROM export 
         WHERE module_id = :module_id 
           AND rva = :max_rva
-      """, { "module_id": module_id, "module_base": module_base, "addr": addr, "max_rva": max_rva })
+      """, { "module_id": module_id, "addr": addr - module_base, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
       if len(row) > 1:
@@ -398,28 +410,34 @@ class SymbolTable(object):
 
     # Locate the module's symbol range our address may reside in
     if use_symbols:
-      db.execute("""SELECT MAX(rva)
+      db.execute("""SELECT pdb.id
         FROM mod_pdb
           INNER JOIN pdb ON mod_pdb.pdb_id = pdb.id
           INNER JOIN symbol ON pdb.id = symbol.pdb_id
         WHERE module_id = :module_id 
-          AND rva + :module_base <= :addr
-      """, { "module_id": module_id, "module_base": module_base, "addr": addr })
-      row = db.fetchall()
-      if len(row) == 0:
-        return "UNKNOWN"
-      assert(len(row) == 1)
-      max_rva = row[0][0]
-      if max_rva == None:
+          AND rva <= :addr
+      """, { "module_id": module_id, "addr": addr - module_base })
+      row = db.fetchone()
+      if row == None or row[0] == None:
         return export_lookup(db, module_name, module_id, module_base, "")
+      pdb_id = row[0]
 
-      db.execute("""SELECT DISTINCT section, name, :addr - rva - :module_base
-        FROM mod_pdb
-          INNER JOIN pdb ON mod_pdb.pdb_id = pdb.id
+      db.execute("""SELECT MAX(rva)
+        FROM pdb
           INNER JOIN symbol ON pdb.id = symbol.pdb_id
-        WHERE module_id = :module_id 
+        WHERE pdb.id = :pdb_id
+          AND rva <= :addr
+      """, { "pdb_id": pdb_id, "addr": addr - module_base })
+      row = db.fetchone()
+      max_rva = row[0]
+      assert(max_rva != None)
+
+      db.execute("""SELECT DISTINCT section, name, :addr - rva
+        FROM pdb
+          INNER JOIN symbol ON pdb.id = symbol.pdb_id
+        WHERE pdb.id = :pdb_id 
           AND rva = :max_rva
-      """, { "module_id": module_id, "module_base": module_base, "addr": addr, "max_rva": max_rva })
+      """, { "pdb_id": pdb_id, "addr": addr - module_base, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
       if len(row) > 1:
