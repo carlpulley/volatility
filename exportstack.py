@@ -191,6 +191,7 @@ class GS(EBP):
   EBP (-> *(EBP))    /GS [security_cookie]: *(EBP+4)    symbol_lookup(*(EBP+4))    [*(EBP-4) == security_cookie ^ EBP]
   Detect EBP stack frames with /GS security cookies (originating module determined using EIP)
   """
+  # Security cookie calculations prior to cookie saving:
   # WinXP: *(EBP-4) == security_cookie
   # Vista, 2008 and Win7: *(EBP-4) == security_cookie ^ EBP
   def __init__(self, start, stack_base, stack_limit, eproc, modules=None, module_addrs=None, *args, **kwargs):
@@ -202,22 +203,26 @@ class GS(EBP):
       self.modules = modules
       self.module_addrs = module_addrs
     mod = tasks.find_module(self.modules, self.module_addrs, self.eip)
-    if mod == None:
-      self.security_cookie = None
-      self.cookie = None
-    else:
+    self.security_cookie = None
+    self.cookie = None
+    security_cookie_addr = None
+    if mod != None:
       load_config = mod.get_load_config_directory()
       if load_config == None:
-        self.security_cookie = None
+        # Attempt to use PDB symbols to locate this module's ___security_cookie
+        addrs = eproc.lookup("{0}/.data!___security_cookie".format(str(mod.BaseDllName)))
+        if len(addrs) > 0:
+          security_cookie_addr = addrs[0]
       else:
-        self.security_cookie = load_config.SecurityCookie
+        # Use _IMAGE_LOAD_CONFIG_DIRECTORY to locate this module's ___security_cookie
+        security_cookie_addr = self.addrspace.vtop(load_config.SecurityCookie)
+      if security_cookie_addr != None and self.addrspace.is_valid_address(security_cookie_addr):
+        self.security_cookie = self.addrspace.read_long_phys(self.addrspace.vtop(security_cookie_addr))
       if self.addrspace.is_valid_address(self.ebp - self.alignment):
         self.cookie = self.addrspace.read_long_phys(self.addrspace.vtop(self.ebp - self.alignment))
-      else:
-        self.cookie = None
 
   def cookie_check(self):
-    return self.security_cookie != None and self.cookie != None and self.ebp == self.cookie ^ self.security_cookie
+    return self.ebp ^ self.cookie == self.security_cookie
 
   def up(self):
     for frame in EBP.up(self):
@@ -235,7 +240,7 @@ class GS(EBP):
         if self.cookie_check():
           return "/GS [True]"
         else:
-          return "/GS False [{0:#010x} ^ {1:#010x}]".format(self.security_cookie, self.cookie)
+          return "/GS False [{0:#010x} ^ {1:#010x} != {2:#010x}]".format(self.ebp, self.cookie, self.security_cookie)
       else:
         return "/GS ???? [UNREADABLE]".format(self.security_cookie)
     else:
@@ -536,7 +541,7 @@ class StackModification32bit(obj.ProfileModification):
       'CSDVersion': [ 0x34, ['unsigned short']],
       'Reserved1': [ 0x36, ['unsigned short']],
       'EditList': [ 0x38, ['unsigned int']],
-      'SecurityCookie': [ 0x3c, ['unsigned int']],
+      'SecurityCookie': [ 0x3c, ['unsigned int']], # pointer to ___security_cookie
       'SEHandlerTable': [ 0x40, ['unsigned int']],
       'SEHandlerCount': [ 0x44, ['unsigned int']],
       }],
@@ -673,7 +678,7 @@ class ExportStack(threads.Threads):
     self.table_header(outfd, [
       ('Frame', '<14'),
       ("Type", "<12"),
-      ('Representation', '<40'),
+      ('Representation', '<50'),
       ('Executable Address', '<32'),
       ("Module", "<")
     ])
