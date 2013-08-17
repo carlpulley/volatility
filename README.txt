@@ -81,6 +81,10 @@ Other Plugins
       volshell> self.proc.lookup(".data!___security_cookie")
       [ 2153029696L, 2154673632L, 4166547756L, ... ]
 
+      # wininet.dll stack cookie and cookie complement addresses ('%' matches anything)
+      volshell> self.proc.lookup("wininet%/.data!%security_cookie%")
+      [ 1998821912, 1998822580 ]
+
     NOTE: due to a bug in pdbparse's src/undname.c code, it is currently necessary to 
       hand patch this file prior building pdbparse. For more details, see:
           https://code.google.com/p/pdbparse/issues/detail?id=13
