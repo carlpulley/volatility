@@ -71,11 +71,17 @@ Other Plugins
       # Case 2: SQLite Symbols DB already built:
       volshell> self.proc.symbol_tables()
 
-      # Example queries:
+    Example queries:
+
+      # lookup nearest symbol to an address
       volshell> self.proc.lookup(0xb25fc838)
       'sysaudio.sys/PAGE!CClockInstance::ClockGetCorrelatedPhysicalTime'
 
-      # stack cookie address for ntoskrnl.exe
+      # lookup nearest module export symbol to an address
+      volshell> self.proc.lookup(0x71ab3076, use_symbols=False)
+      'ws2_32.dll/????!WSALookupServiceNextW+0x1dd'
+
+      # get stack cookie address for ntoskrnl.exe
       volshell> self.proc.lookup("ntoskrnl.exe/.data!___security_cookie")
       [ 2153029696L ]
 
@@ -87,6 +93,18 @@ Other Plugins
       # anything)
       volshell> self.proc.lookup("wininet%/.data!%security_cookie%")
       [ 1998821912, 1998822580 ]
+
+      # view all wshtcpip.dll global variables
+      volshell> [ self.proc.lookup(a) for a in self.proc.lookup("wshtcpip.dll/.data!%") ]
+      [ 'wshtcpip.dll/.data!__security_cookie',
+        'wshtcpip.dll/.data!__security_cookie_complement',
+        'wshtcpip.dll/.data!TcpMappingTriples',
+        'wshtcpip.dll/.data!UdpMappingTriples',
+        'wshtcpip.dll/.data!RawMappingTriples',
+        'wshtcpip.dll/.data!Winsock2Protocols',
+        'wshtcpip.dll/.data!TcpipProviderGuid',
+        'wshtcpip.dll/.data!_NLG_Destination'
+      ]
 
     NOTE: due to a bug in pdbparse's src/undname.c code, it is currently 
       necessary to hand patch this file prior building pdbparse. For more 
