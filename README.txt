@@ -26,7 +26,7 @@ and http://honeynet.org/challenges/2010_3_banking_troubles for more
 information).
 
   exportfile.py [DEPRECIATED: replaced by dumpfiles in Volatility 2.3] - this 
-                  plugin implements the exporting and saving of _FILE_OBJECT's. 
+                  plugin implements the exporting and saving of _FILE_OBJECT's.
                   In addition, file reconstruction functionality is offered by 
                   the plugin.
   exportstack.py - this plugin displays information regarding an _EPROCESS'es 
@@ -46,20 +46,22 @@ Other Plugins
 =============
 
   symbols.py - this plugin is designed to resolve:
-      * Windows addresses to the nearest function/method name within a symbol table
+      * Windows addresses to the nearest function/method name within a symbol 
+        table
       * symbol names to addresses.
-    Including this plugin will ensure that _EPROCESS object classes are injected with 
-    a symbol_table and lookup method.
+    Including this plugin will ensure that _EPROCESS object classes are 
+    injected with a symbol_table and lookup method.
 
-    When symbols_table is called with build_symbols True, SQLite DB symbol tables 
-    are built (these include Microsoft's debugging symbol information). The symbol PDB 
-    files are downloaded and, after processing, their contents are inserted into the 
-    underlying SQLite DB (which is located within Volatility's caching directories). 
-    Brendan Dolan-Gavitt's pdbparse is used here.
+    When symbols_table is called with build_symbols True, SQLite DB symbol 
+    tables are built (these include Microsoft's debugging symbol information). 
+    The symbol PDB files are downloaded and, after processing, their contents 
+    are inserted into the underlying SQLite DB (which is located within 
+    Volatility's caching directories). Brendan Dolan-Gavitt's pdbparse is used 
+    here.
 
-    When lookup is called with use_symbols True, then Microsoft's debugging symbol 
-    information is used during resolution. Otherwise, module exports information is 
-    used for resolution.
+    When lookup is called with use_symbols True, then Microsoft's debugging 
+    symbol information is used during resolution. Otherwise, module exports 
+    information is used for resolution.
 
     Example usage (from a volshell command prompt):
 
@@ -81,63 +83,70 @@ Other Plugins
       volshell> self.proc.lookup(".data!___security_cookie")
       [ 2153029696L, 2154673632L, 4166547756L, ... ]
 
-      # wininet.dll stack cookie and cookie complement addresses ('%' matches anything)
+      # wininet.dll stack cookie and cookie complement addresses ('%' matches 
+      # anything)
       volshell> self.proc.lookup("wininet%/.data!%security_cookie%")
       [ 1998821912, 1998822580 ]
 
-    NOTE: due to a bug in pdbparse's src/undname.c code, it is currently necessary to 
-      hand patch this file prior building pdbparse. For more details, see:
+    NOTE: due to a bug in pdbparse's src/undname.c code, it is currently 
+      necessary to hand patch this file prior building pdbparse. For more 
+      details, see:
           https://code.google.com/p/pdbparse/issues/detail?id=13
 
   volshell.py - this plugin is a reworking of the existing Volatility volshell
     plugin. Major changes are as follows:
       + hh has been deleted. All help information is now available as Python
-        documentation strings. For example, help(self) and dir(self) give general
-        command help, whilst help(<command>) provides help on a specific command.
-        TODO: when using the IPython command line prompt, __builtin__.help currently 
-          overwrites the defined help alias (to self.help), so it is necessary to 
-          manually correct this by entering 'help = self.help' after the IPython 
-          shell starts. Failing to do this means that individual plugin help will
-          be limited.
-      + the type of volshell instance launched (i.e. WinVolshell, LinuxVolshell, 
-        MacVolshell, etc.) is chosen using the profile metadata (specifically the 
-        os attribute). When the OS is unknown, a base Volshell is launched - so 
-        just load the image and go!
-      + all Volatility plugins are potentially available as commands. These are 
-        filtered using the image's profile. Any plugin without a render_text is 
-        additionally filtered out. Plugin commands can produce three types of 
-        output:
+        documentation strings. For example, help(self) and dir(self) give 
+        general command help, whilst help(<command>) provides help on a 
+        specific command.
+        TODO: when using the IPython command line prompt, __builtin__.help 
+          currently overwrites the defined help alias (to self.help), so it is 
+          necessary to manually correct this by entering 'help = self.help' 
+          after the IPython shell starts. Failing to do this means that 
+          individual plugin help will be limited.
+      + the type of volshell instance launched (i.e. WinVolshell, 
+        LinuxVolshell, MacVolshell, etc.) is chosen using the profile metadata 
+        (specifically the os attribute). When the OS is unknown, a base 
+        Volshell is launched - so just load the image and go!
+      + all Volatility plugins are potentially available as commands. These 
+        are filtered using the image's profile. Any plugin without a 
+        render_text is additionally filtered out. Plugin commands can produce 
+        three types of output:
           * with render=True, the plugin prints to stdout
-          * with render=False and table_data=True, the plugin hooks the table_header 
-            and table_row methods and returns a list of hashes representing the 
-            displayed tabular data
-          * with render=False and table_data=False, the plugin returns the plugin's 
-            calculate result.
-        Plugin arguments are scraped by hooking the singleton class conf.ConfObject 
-        and grabbing command line options. These are used (after filtering out generic 
-        options from commands.Command) to generate valid keyword arguments with 
-        defaults (if specified). Plugin commands are dynamically added to the Volshell 
-        class and are accessed via self.<command>. For convenience, aliases are 
-        generated using '<command> = self.<command>'.
-      + it is now possible to override exiting commands in BaseVolshell (e.g. see ps 
-        in WinVolshell, LinuxVolshell and MacVolshell) and to add in commands that 
-        are OS specific (e.g. see WinVolshell for list_entry).
-      + a source command has been added to ease loading Volshell scripts into the 
-        current session. Any function in the loaded file matching the pattern:
+          * with render=False and table_data=True, the plugin hooks the 
+            table_header and table_row methods and returns a list of hashes 
+            representing the displayed tabular data
+          * with render=False and table_data=False, the plugin returns the 
+            plugin's calculate result.
+        Plugin arguments are scraped by hooking the singleton class conf.
+        ConfObject and grabbing command line options. These are used (after 
+        filtering out generic options from commands.Command) to generate valid 
+        keyword arguments with defaults (if specified). Plugin commands are 
+        dynamically added to the Volshell class and are accessed via 
+        self.<command>. For convenience, aliases are generated using 
+        '<command> = self.<command>'.
+      + it is now possible to override exiting commands in BaseVolshell (e.g. 
+        see ps in WinVolshell, LinuxVolshell and MacVolshell) and to add in 
+        commands that are OS specific (e.g. see WinVolshell for list_entry).
+      + a source command has been added to ease loading Volshell scripts into 
+        the current session. Any function in the loaded file matching the 
+        pattern:
 
           def func(self, ..):
             ..
 
-        is blindly bound to the current Volshell instance and made available as self.func(..) 
-        or func(self, ..). If this code was located in /path/to/func.py then it can be sourced
-        using the Volshell command (for convenience, sys.path is also searched):
+        is blindly bound to the current Volshell instance and made available 
+        as self.func(..) or func(self, ..). If this code was located in 
+        /path/to/func.py then it can be sourced using the Volshell command (
+        for convenience, sys.path is also searched):
 
           source("/path/to/func.py")
 
-        TODO: implement code to assign 'func = self.func' in the Volshell session.
-      + [EXPERIMENTAL] it is possible to use the Volshell plugin in a Volatility as a library 
-        like manner [1]. The following simple code demonstrates the idea by printing out a 
-        (sorted) process tree:
+        TODO: implement code to assign 'func = self.func' in the Volshell 
+          session.
+      + [EXPERIMENTAL] it is possible to use the Volshell plugin in a 
+        Volatility as a library like manner [1]. The following simple code 
+        demonstrates the idea by printing out a (sorted) process tree:
 
           from volatility.plugins.volshell import Volshell
           from itertools import groupby
@@ -150,17 +159,17 @@ Other Plugins
               for pid in pids:
                 print "  PID: {0}".format(pid['PID'])
 
-        In library mode, the Volshell plugin related methods (i.e. the help, calculate  
-        and render_* methods) are disabled.
-        TODO: generate examples demonstrating the potential uses for Volshell script 
-          and library code.
-      + [EXPERIMENTAL] based on [2] and [3], there appears to be a longer term preference 
-        for IPython being the default command line experience (+1 from myself!). So, when 
-        we failover to a basic Python Volshell, an IPython "nag" banner is displayed on 
-        startup.
+        In library mode, the Volshell plugin related methods (i.e. the help, 
+        calculate and render_* methods) are disabled.
+        TODO: generate examples demonstrating the potential uses for Volshell 
+          script and library code.
+      + [EXPERIMENTAL] based on [2] and [3], there appears to be a longer term 
+        preference for IPython being the default command line experience (+1 
+        from myself!). So, when we failover to a basic Python Volshell, an 
+        IPython "nag" banner is displayed on startup.
 
-    INSTALLATION: run the following commands to install (WARNING: the existing Volshell 
-      code is deleted):
+    INSTALLATION: run the following commands to install (WARNING: the existing 
+      Volshell code is deleted):
 
         rm $VOLATILITY_SRC/volatility/plugins/linux/linux_volshell.py
         rm $VOLATILITY_SRC/volatility/plugins/mac/mac_volshell.py
