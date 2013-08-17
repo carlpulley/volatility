@@ -215,7 +215,7 @@ class GS(EBP):
           security_cookie_addr = addrs[0]
       else:
         # Use _IMAGE_LOAD_CONFIG_DIRECTORY to locate this module's ___security_cookie
-        security_cookie_addr = self.addrspace.vtop(load_config.SecurityCookie)
+        security_cookie_addr = load_config.SecurityCookie
       if security_cookie_addr != None and self.addrspace.is_valid_address(security_cookie_addr):
         self.security_cookie = self.addrspace.read_long_phys(self.addrspace.vtop(security_cookie_addr))
       if self.addrspace.is_valid_address(self.ebp - self.alignment):
@@ -570,7 +570,7 @@ class StackModification64bit(obj.ProfileModification):
       'CSDVersion': [ 0x50, ['unsigned short']],
       'Reserved1': [ 0x52, ['unsigned short']],
       'EditList': [ 0x54, ['unsigned long long']],
-      'SecurityCookie': [ 0x5c, ['unsigned long long']],
+      'SecurityCookie': [ 0x5c, ['unsigned long long']], # pointer to ___security_cookie
       'SEHandlerTable': [ 0x64, ['unsigned long long']],
       'SEHandlerCount': [ 0x6c, ['unsigned long long']],
       }],
