@@ -541,7 +541,7 @@ class StackModification32bit(obj.ProfileModification):
       'CSDVersion': [ 0x34, ['unsigned short']],
       'Reserved1': [ 0x36, ['unsigned short']],
       'EditList': [ 0x38, ['unsigned int']],
-      'SecurityCookie': [ 0x3c, ['unsigned int']], # pointer to ___security_cookie
+      'SecurityCookie': [ 0x3c, ['unsigned int']], # == ___security_cookie
       'SEHandlerTable': [ 0x40, ['unsigned int']],
       'SEHandlerCount': [ 0x44, ['unsigned int']],
       }],
@@ -570,7 +570,7 @@ class StackModification64bit(obj.ProfileModification):
       'CSDVersion': [ 0x50, ['unsigned short']],
       'Reserved1': [ 0x52, ['unsigned short']],
       'EditList': [ 0x54, ['unsigned long long']],
-      'SecurityCookie': [ 0x5c, ['unsigned long long']], # pointer to ___security_cookie
+      'SecurityCookie': [ 0x5c, ['unsigned long long']], # == ___security_cookie 
       'SEHandlerTable': [ 0x64, ['unsigned long long']],
       'SEHandlerCount': [ 0x6c, ['unsigned long long']],
       }],
