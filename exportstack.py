@@ -701,6 +701,17 @@ class ExportStack(threads.Threads):
     return list(reversed(list(enumerate(frames_up, start=1)))) + [ (-n, f) for n, f in enumerate(frames_down, start=0) ]
 
   def carve_thread(self, outfd, thread, kernel_start):
+    def lookup(eproc, addr):
+      names = eproc.lookup(addr, use_symbols=self.use_symbols)
+      if names == None:
+        return "-"
+      if len(names) == 0:
+        return "UNKNOWN"
+      ambiguity = ""
+      if len(names) > 1:
+        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(names))
+      return "{0}{1}".format(ambiguity, names[0])
+
     trap_frame = thread.Tcb.TrapFrame.dereference_as("_KTRAP_FRAME")
     process_addrspace = thread.owning_process().get_process_address_space()
     eproc = thread.owning_process()
@@ -723,7 +734,7 @@ class ExportStack(threads.Threads):
       outfd.write("<== Kernel Stack Unwind ==>\n")
       # See [6] for how EBP is saved on the kernel stack and the reason for a magic value of 12
       ebp = process_addrspace.read_long_phys(process_addrspace.vtop(esp+12))
-      self.unwind_stack(outfd, functools.partial(eproc.lookup, use_symbols=self.use_symbols), self.unwind_strategy(self.kernel_strategies, ebp, kstack_base, kstack_limit, eproc))
+      self.unwind_stack(outfd, functools.partial(lookup, eproc), self.unwind_strategy(self.kernel_strategies, ebp, kstack_base, kstack_limit, eproc))
       outfd.write("<== End Kernel Stack Unwind ==>\n")
     elif not thread.Tcb.KernelStackResident:
       outfd.write("Kernel stack is not resident\n")
@@ -748,7 +759,7 @@ class ExportStack(threads.Threads):
             return teb.NtTib.ExceptionList.v()
           else:
             return trap_frame.Ebp
-        self.unwind_stack(outfd, functools.partial(eproc.lookup, use_symbols=self.use_symbols), self.unwind_strategy(self.user_strategies, start_func, ustack_base, ustack_limit, eproc))
+        self.unwind_stack(outfd, functools.partial(lookup, eproc), self.unwind_strategy(self.user_strategies, start_func, ustack_base, ustack_limit, eproc))
         outfd.write("<== End User Stack Unwind ==>\n")
       elif not trap_frame.is_valid():
         outfd.write("User Trap Frame is Invalid\n")

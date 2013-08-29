@@ -75,11 +75,11 @@ Other Plugins
 
       # lookup nearest symbol to an address
       volshell> self.proc.lookup(0xb25fc838)
-      'sysaudio.sys/PAGE!CClockInstance::ClockGetCorrelatedPhysicalTime'
+      [ 'sysaudio.sys/PAGE!CClockInstance::ClockGetCorrelatedPhysicalTime' ]
 
       # lookup nearest module export symbol to an address
       volshell> self.proc.lookup(0x71ab3076, use_symbols=False)
-      'ws2_32.dll/????!WSALookupServiceNextW+0x1dd'
+      [ 'ws2_32.dll/????!WSALookupServiceNextW+0x1dd' ]
 
       # get stack cookie address for ntoskrnl.exe
       volshell> self.proc.lookup("ntoskrnl.exe/.data!___security_cookie")
