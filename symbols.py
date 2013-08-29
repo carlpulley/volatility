@@ -348,7 +348,6 @@ class SymbolTable(object):
 
   def lookup_name(self, eproc, addr, use_symbols):
     def export_lookup(db, module_name, module_id, module_base, section_pad):
-      ambiguity = ""
       db.execute("""SELECT rva
         FROM export 
         WHERE module_id = :module_id 
@@ -356,7 +355,7 @@ class SymbolTable(object):
       """, { "module_id": module_id, "addr": addr - module_base })
       row = db.fetchone()
       if row == None or row[0] == None:
-        return "{0}/{1}!{2:+#x}".format(module_name, section_pad, addr - module_base)
+        return [ (module_name, section_pad, None, addr - module_base) ]
       minimal_rva = row[0]
 
       db.execute("""SELECT MAX(rva)
@@ -376,22 +375,17 @@ class SymbolTable(object):
       """, { "module_id": module_id, "addr": addr - module_base, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
-      if len(row) > 1:
-        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
-      ordinal, func_name, diff = row[0]
-      if func_name == "":
-        func_name = str(ordinal or '')
-      else:
-        func_name = str(self.parser.undecorate(str(func_name))[0])
-      if diff == 0:
-        diff = ""
-      else:
-        diff = "{0:+#x}".format(diff)
-      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_pad, func_name, diff)
+      result = []
+      for ordinal, func_name, diff in row:
+        if func_name == "":
+          func_name = str(ordinal or '')
+        else:
+          func_name = str(self.parser.undecorate(str(func_name))[0])
+        result += [ (module_name, section_pad, func_name, diff) ]
+      return result
 
     db = self.get_cursor()
     eproc_addr = int(eproc.v())
-    ambiguity = ""
 
     # Locate the module our address may reside in
     db.execute("""SELECT DISTINCT module.id, module.name, base.addr
@@ -404,7 +398,7 @@ class SymbolTable(object):
     """, { "eproc": eproc_addr, "addr": addr })
     row = db.fetchall()
     if len(row) == 0:
-      return "UNKNOWN"
+      return []
     assert(len(row) == 1)
     module_id, module_name, module_base = row[0]
 
@@ -440,17 +434,12 @@ class SymbolTable(object):
       """, { "pdb_id": pdb_id, "addr": addr - module_base, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
-      if len(row) > 1:
-        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(row))
-      section_name, func_name, diff = row[0]
-      func_name = str(self.parser.undecorate(str(func_name))[0])
-
-      if diff == 0:
-        diff = ""
-      else:
-        diff = "{0:+#x}".format(diff)
+      result = []
+      for section_name, func_name, diff in row:
+        func_name = str(self.parser.undecorate(str(func_name))[0])
+        result += [ (module_name, section_name, func_name, diff) ]
   
-      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_name, func_name, diff)
+      return result
     else:
       return export_lookup(db, module_name, module_id, module_base, "????")
 
@@ -840,7 +829,20 @@ class SymbolsEPROCESS(windows._EPROCESS):
     if addr_or_name == None:
       return "-"
     elif type(addr_or_name) == int or type(addr_or_name) == long:
-      return self.symbol_table().lookup_name(self, int(addr_or_name), use_symbols)
+      names = self.symbol_table().lookup_name(self, int(addr_or_name), use_symbols)
+      ambiguity = ""
+      if len(names) == 0:
+        return "UNKNOWN"
+      elif len(names) > 1:
+        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(names))
+      module_name, section_pad, func_name, diff = names[0]
+      if func_name == None:
+        return "{0}/{1}!{2:+#x}".format(module_name, section_pad, diff)
+      if diff == 0:
+        diff = ""
+      else:
+        diff = "{0:+#x}".format(diff)
+      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_pad, func_name, diff)
     elif type(addr_or_name) == str:
       pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.%]"))
       mobj = pattern.match(addr_or_name)
