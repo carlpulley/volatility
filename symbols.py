@@ -379,8 +379,6 @@ class SymbolTable(object):
       for ordinal, func_name, diff in row:
         if func_name == "":
           func_name = str(ordinal or '')
-        else:
-          func_name = str(self.parser.undecorate(str(func_name))[0])
         result += [ (module_name, section_pad, func_name, diff) ]
       return result
 
@@ -434,12 +432,8 @@ class SymbolTable(object):
       """, { "pdb_id": pdb_id, "addr": addr - module_base, "max_rva": max_rva })
       row = db.fetchall()
       assert(len(row) > 0)
-      result = []
-      for section_name, func_name, diff in row:
-        func_name = str(self.parser.undecorate(str(func_name))[0])
-        result += [ (module_name, section_name, func_name, diff) ]
-  
-      return result
+      
+      return [ (module_name, section_name, func_name, diff) for section_name, func_name, diff in row ]
     else:
       return export_lookup(db, module_name, module_id, module_base, "????")
 
@@ -842,6 +836,7 @@ class SymbolsEPROCESS(windows._EPROCESS):
         diff = ""
       else:
         diff = "{0:+#x}".format(diff)
+      func_name = str(self.symbol_table().parser.undecorate(str(func_name))[0])
       return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_pad, func_name, diff)
     elif type(addr_or_name) == str:
       pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.%]"))
