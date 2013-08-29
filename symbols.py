@@ -799,7 +799,7 @@ class SymbolsEPROCESS(windows._EPROCESS):
 
   def lookup(self, addr_or_name, use_symbols=True):
     """
-    When an address is given, resolve to the nearest symbol name within this processes 
+    When an address is given, resolve to the nearest symbol names within this processes 
     symbol table. If use_symbols is specified, addresses can resolve to names with the 
     format:
 
@@ -821,23 +821,21 @@ class SymbolsEPROCESS(windows._EPROCESS):
     Otherwise, resolving occurs using the module exports information.
     """
     if addr_or_name == None:
-      return "-"
+      return None
     elif type(addr_or_name) == int or type(addr_or_name) == long:
       names = self.symbol_table().lookup_name(self, int(addr_or_name), use_symbols)
-      ambiguity = ""
-      if len(names) == 0:
-        return "UNKNOWN"
-      if len(names) > 1:
-        ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(names))
-      module_name, section_name, func_name, diff = names[0]
-      if func_name == None:
-        return "{0}{1}/{2}!{3:+#x}".format(ambiguity, module_name, section_name, diff)
-      if diff == 0:
-        diff = ""
-      else:
-        diff = "{0:+#x}".format(diff)
-      func_name = str(self.symbol_table().parser.undecorate(str(func_name))[0])
-      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_name, func_name, diff)
+      result = []
+      for module_name, section_name, func_name, diff in names:
+        if func_name == None:
+          result += [ "{0}/{1}!{2:+#x}".format(module_name, section_name, diff) ]
+        else:
+          if diff == 0:
+            diff = ""
+          else:
+            diff = "{0:+#x}".format(diff)
+          func_name = str(self.symbol_table().parser.undecorate(str(func_name))[0])
+          result += [ "{0}/{1}!{2}{3}".format(module_name, section_name, func_name, diff) ]
+      return result
     elif type(addr_or_name) == str:
       pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.%]"))
       mobj = pattern.match(addr_or_name)
