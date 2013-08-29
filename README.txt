@@ -66,10 +66,10 @@ Other Plugins
     Example usage (from a volshell command prompt):
 
       # Case 1: SQLite Symbols DB not built:
-      volshell> self.proc.symbol_tables(build_symbols=True)
+      volshell> self.proc.symbol_table(build_symbols=True)
 
       # Case 2: SQLite Symbols DB already built:
-      volshell> self.proc.symbol_tables()
+      volshell> self.proc.symbol_table()
 
     Example queries:
 
