@@ -827,17 +827,17 @@ class SymbolsEPROCESS(windows._EPROCESS):
       ambiguity = ""
       if len(names) == 0:
         return "UNKNOWN"
-      elif len(names) > 1:
+      if len(names) > 1:
         ambiguity = "[AMBIGUOUS: 1st of {0}] ".format(len(names))
-      module_name, section_pad, func_name, diff = names[0]
+      module_name, section_name, func_name, diff = names[0]
       if func_name == None:
-        return "{0}/{1}!{2:+#x}".format(module_name, section_pad, diff)
+        return "{0}{1}/{2}!{3:+#x}".format(ambiguity, module_name, section_name, diff)
       if diff == 0:
         diff = ""
       else:
         diff = "{0:+#x}".format(diff)
       func_name = str(self.symbol_table().parser.undecorate(str(func_name))[0])
-      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_pad, func_name, diff)
+      return "{0}{1}/{2}!{3}{4}".format(ambiguity, module_name, section_name, func_name, diff)
     elif type(addr_or_name) == str:
       pattern = re.compile("\A(((?P<module>{0}+)/)?(?P<section>{0}*)!)?(?P<name>{0}+)\Z".format("[a-zA-Z0-9_@\?\$\.%]"))
       mobj = pattern.match(addr_or_name)
